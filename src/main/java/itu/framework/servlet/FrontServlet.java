@@ -10,7 +10,7 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.net.URL;
 
-@WebServlet(name = "FrontServlet", urlPatterns = {"/"}, loadOnStartup = 1)
+@WebServlet(name = "FrontServlet", urlPatterns = {"/"})
 
 public class FrontServlet extends HttpServlet {
 
