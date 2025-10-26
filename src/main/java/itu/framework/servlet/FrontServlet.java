@@ -8,7 +8,6 @@ import jakarta.servlet.http.HttpServletResponse;
 
 import java.io.IOException;
 import java.io.PrintWriter;
-import java.net.URL;
 
 @WebServlet(name = "FrontServlet", urlPatterns = {"/"})
 
@@ -28,7 +27,7 @@ public class FrontServlet extends HttpServlet {
         resp.setContentType("text/html; charset=UTF-8");
         try (PrintWriter w = resp.getWriter()) {
             w.println("<html><head><meta charset='UTF-8'><title>FrontServlet</title></head><body>");
-            w.println("<h2>FrontServlet — lien saisi :</h2>");
+            w.println("<h2>FrontServlet</h2>");
             w.println("<p>Requested URL: <strong>" + req.getRequestURL().toString() + "</strong></p>");
             w.println("</body></html>");
         }
