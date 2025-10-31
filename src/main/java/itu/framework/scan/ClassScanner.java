@@ -1,4 +1,4 @@
-package itu.framework.core;
+package itu.framework.scan;
 
 import java.io.File;
 import java.io.IOException;
