@@ -75,4 +75,5 @@ public class ClassScanner {
             }
         } catch (IOException ignored) {}
     }
+    
 }

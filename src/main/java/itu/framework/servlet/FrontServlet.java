@@ -2,6 +2,8 @@ package itu.framework.servlet;
 
 import itu.framework.listener.FrameworkListener;
 import itu.framework.scan.ControllerScanner;
+import itu.framework.scan.ModelView;
+import jakarta.servlet.RequestDispatcher;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.HttpServlet;
@@ -10,10 +12,10 @@ import jakarta.servlet.http.HttpServletResponse;
 
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.lang.reflect.Method;
 import java.util.Map;
 
-@WebServlet(name = "FrontServlet", urlPatterns = {"/"})
-
+@WebServlet(name = "FrontServlet", urlPatterns = {"/"}, loadOnStartup = 1)
 public class FrontServlet extends HttpServlet {
 
     @Override
@@ -34,53 +36,73 @@ public class FrontServlet extends HttpServlet {
         String contextPath = req.getContextPath();
         String path = requestURI.substring(contextPath.length());
         
+        // Si le path est vide, mettre "/"
+        if (path == null || path.isEmpty()) {
+            path = "/";
+        }
+        
         // Récupération des mappings depuis ServletContext
+        @SuppressWarnings("unchecked")
         Map<String, ControllerScanner.MethodInfo> mappings = 
-            (Map<String, ControllerScanner.MethodInfo>) getServletContext()
-                .getAttribute(FrameworkListener.MAPPINGS_KEY);
+            (Map<String, ControllerScanner.MethodInfo>) getServletContext().getAttribute(FrameworkListener.MAPPINGS_KEY);
         
         // Création de la clé METHOD:URL
         String key = httpMethod + ":" + path;
         
-        try (PrintWriter w = resp.getWriter()) {
-            w.println("<html><head><meta charset='UTF-8'><title>FrontServlet</title></head><body>");
-            w.println("<h2>FrontServlet</h2>");
-            w.println("<p>Requested URL: <strong>" + req.getRequestURL().toString() + "</strong></p>");
+        if (mappings == null) {
+            PrintWriter out = resp.getWriter();
+            out.print("<html><body>");
+            out.print("<p>ServletContext non initialisé (aucun mapping disponible)</p>");
+            out.print("</body></html>");
+            return;
+        }
+        
+        // Recherche du mapping (d'abord avec la méthode HTTP spécifique, puis avec ANY)
+        ControllerScanner.MethodInfo methodInfo = mappings.get(key);
+        
+        if (methodInfo == null) {
+            PrintWriter out = resp.getWriter();
+            out.print("<html><body>");
+            out.print("<p>Aucun mapping trouvé pour: " + key + "</p>");
+            out.print("</body></html>");
+            return;
+        }
+        
+        // Vérification du type de retour de la méthode
+        try {
+            Method method = methodInfo.getMethod();
+            Class<?> returnType = method.getReturnType();
             
-            // Vérification si le mapping existe
-            if (mappings != null && mappings.containsKey(key)) {
-                ControllerScanner.MethodInfo methodInfo = mappings.get(key);
-                w.println("<hr>");
-                w.println("<h3>Mapping trouvé ✓</h3>");
-                w.println("<ul>");
-                w.println("<li><strong>URL:</strong> " + path + "</li>");
-                w.println("<li><strong>Méthode HTTP:</strong> " + httpMethod + "</li>");
-                w.println("<li><strong>Classe:</strong> " + methodInfo.getControllerClass().getName() + "</li>");
-                w.println("<li><strong>Méthode de classe:</strong> " + methodInfo.getMethod().getName() + "()</li>");
-                w.println("</ul>");
-            } else if (mappings != null) {
-                // Essayer avec ANY
-                String anyKey = "ANY:" + path;
-                if (mappings.containsKey(anyKey)) {
-                    ControllerScanner.MethodInfo methodInfo = mappings.get(anyKey);
-                    w.println("<hr>");
-                    w.println("<h3>Mapping trouvé (ANY) ✓</h3>");
-                    w.println("<ul>");
-                    w.println("<li><strong>URL:</strong> " + path + "</li>");
-                    w.println("<li><strong>Méthode HTTP:</strong> ANY (accepte " + httpMethod + ")</li>");
-                    w.println("<li><strong>Classe:</strong> " + methodInfo.getControllerClass().getName() + "</li>");
-                    w.println("<li><strong>Méthode de classe:</strong> " + methodInfo.getMethod().getName() + "()</li>");
-                    w.println("</ul>");
-                } else {
-                    w.println("<hr>");
-                    w.println("<p><em>Aucun mapping trouvé pour: " + key + "</em></p>");
-                }
+            // Instanciation du contrôleur
+            Object controllerInstance = methodInfo.getControllerClass().getDeclaredConstructor().newInstance();
+            
+            // Invocation de la méthode
+            Object result = method.invoke(controllerInstance);
+            
+            // Gestion selon le type de retour
+            if (returnType.equals(String.class)) {
+                // Si String, afficher avec out.print
+                PrintWriter out = resp.getWriter();
+                out.print((String) result);
+            } else if (returnType.equals(ModelView.class)) {
+                // Si ModelView, faire un dispatcher
+                ModelView modelView = (ModelView) result;
+                String viewPath = modelView.getView();
+                RequestDispatcher dispatcher = req.getRequestDispatcher(viewPath);
+                dispatcher.forward(req, resp);
             } else {
-                w.println("<hr>");
-                w.println("<p><em>ServletContext non initialisé (aucun mapping disponible)</em></p>");
+                // Si autre type, afficher message non supporté
+                PrintWriter out = resp.getWriter();
+                out.print("Type de retour non supporté: " + returnType.getName());
             }
             
-            w.println("</body></html>");
+        } catch (Exception e) {
+            PrintWriter out = resp.getWriter();
+            out.print("<html><body>");
+            out.print("<h3>Erreur lors de l'exécution de la méthode:</h3>");
+            out.print("<pre>" + e.getMessage() + "</pre>");
+            out.print("</body></html>");
+            e.printStackTrace();
         }
     }
 }
