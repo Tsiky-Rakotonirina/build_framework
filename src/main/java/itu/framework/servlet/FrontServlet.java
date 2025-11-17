@@ -2,8 +2,10 @@ package itu.framework.servlet;
 
 import itu.framework.listener.FrameworkListener;
 import itu.framework.scan.ControllerScanner;
+import itu.framework.scan.ControllerScanner.MethodInfo;
 import itu.framework.scan.ModelView;
 import jakarta.servlet.RequestDispatcher;
+import jakarta.servlet.Servlet;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.HttpServlet;
@@ -14,6 +16,8 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.lang.reflect.Method;
 import java.util.Map;
+import java.util.List;
+import java.util.HashMap;
 
 @WebServlet(name = "FrontServlet", urlPatterns = {"/"}, loadOnStartup = 1)
 public class FrontServlet extends HttpServlet {
@@ -56,6 +60,12 @@ public class FrontServlet extends HttpServlet {
             out.print("</body></html>");
             return;
         }
+
+//         change dans /build/scan le modelView en liste de Hashmap
+
+// ensuite utilise le dans /use/java/testController au niveau de /hello
+
+// /build/Front§Servlet mets au moment ou on sait que ca retourne un model view, il faut faire e sorte que ca verfiei si model a des donnees si oui ben aficher aussi dans le view contenu dans getView
         
         // Recherche du mapping (d'abord avec la méthode HTTP spécifique, puis avec ANY)
         ControllerScanner.MethodInfo methodInfo = mappings.get(key);
@@ -85,9 +95,27 @@ public class FrontServlet extends HttpServlet {
                 PrintWriter out = resp.getWriter();
                 out.print((String) result);
             } else if (returnType.equals(ModelView.class)) {
-                // Si ModelView, faire un dispatcher
+                // Si ModelView, faire un dispatcher et injecter les données si présentes
                 ModelView modelView = (ModelView) result;
+                List<HashMap<String, Object>> modelList = modelView.getModelList();
+
+                // Injecter chaque paire clé/valeur comme attribut de requête
+                if (modelList != null && !modelList.isEmpty()) {
+                    for (HashMap<String, Object> map : modelList) {
+                        if (map != null) {
+                            for (Map.Entry<String, Object> e : map.entrySet()) {
+                                req.setAttribute(e.getKey(), e.getValue());
+                            }
+                        }
+                    }
+                    // Mettre aussi la liste entière sous l'attribut 'model'
+                    req.setAttribute("model", modelList);
+                }
+
                 String viewPath = modelView.getView();
+                if (!viewPath.startsWith("/")) {
+                    viewPath = "/" + viewPath;
+                }
                 RequestDispatcher dispatcher = req.getRequestDispatcher(viewPath);
                 dispatcher.forward(req, resp);
             } else {
