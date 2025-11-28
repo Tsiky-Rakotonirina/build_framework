@@ -71,44 +71,43 @@ public class FrontServlet extends HttpServlet {
         
         // Recherche du mapping : exact -> ANY -> patterns avec variables {id}
         ControllerScanner.MethodInfo methodInfo = mappings.get(key);
-        Map<String, String> pathVariables = new HashMap<>();
-        
+
         // Essayer la clé ANY exact
         if (methodInfo == null) {
             String anyKey = "ANY:" + path;
             methodInfo = mappings.get(anyKey);
         }
-        
-        // Si toujours null, essayer de matcher les patterns (ex: /employe/{id})
+
+        // Si toujours null, essayer de matcher les patterns enregistrés (ex: /employe/{id})
         if (methodInfo == null) {
             for (Map.Entry<String, ControllerScanner.MethodInfo> entry : mappings.entrySet()) {
                 String mapKey = entry.getKey();
-                // Garder uniquement les mappings pour la même méthode ou ANY
+                // garder uniquement les mappings pour la même méthode ou ANY
                 if (!(mapKey.startsWith(httpMethod + ":") || mapKey.startsWith("ANY:"))) {
                     continue;
                 }
-                
+
                 ControllerScanner.MethodInfo mi = entry.getValue();
                 Pattern p = mi.getPathPattern();
                 if (p == null) continue;
-                
+
                 Matcher matcher = p.matcher(path);
                 if (matcher.matches()) {
                     methodInfo = mi;
-                    // Extraire les variables de chemin et les stocker
+                    // extraire les variables de chemin et les mettre en attributs de requête
                     List<String> names = mi.getPathParamNames();
                     if (names != null) {
                         for (int i = 0; i < names.size(); i++) {
                             String paramName = names.get(i);
                             String value = matcher.group(i + 1);
-                            pathVariables.put(paramName, value);
+                            req.setAttribute(paramName, value);
                         }
                     }
                     break;
                 }
             }
         }
-        
+
         if (methodInfo == null) {
             PrintWriter out = resp.getWriter();
             out.print("<html><body>");
