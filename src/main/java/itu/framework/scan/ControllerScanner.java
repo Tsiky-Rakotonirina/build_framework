@@ -1,7 +1,9 @@
 package itu.framework.scan;
 
 import itu.framework.annotation.Controller;
-import itu.framework.annotation.Web;
+import itu.framework.annotation.HttpMethod;
+import itu.framework.annotation.RequestParameter;
+import itu.framework.annotation.Url;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;

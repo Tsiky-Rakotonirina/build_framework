@@ -18,6 +18,8 @@ import java.lang.reflect.Method;
 import java.util.Map;
 import java.util.List;
 import java.util.HashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @WebServlet(name = "FrontServlet", urlPatterns = {"/"}, loadOnStartup = 1)
 public class FrontServlet extends HttpServlet {
@@ -114,6 +116,21 @@ public class FrontServlet extends HttpServlet {
             return;
         }
         
+        // Wrapper de requête pour rendre les path variables accessibles via getParameter()
+        final HttpServletRequest originalReq = req;
+        final Map<String, String> finalPathVars = pathVariables;
+        HttpServletRequest wrappedReq = new jakarta.servlet.http.HttpServletRequestWrapper(req) {
+            @Override
+            public String getParameter(String name) {
+                // D'abord chercher dans les path variables
+                if (finalPathVars.containsKey(name)) {
+                    return finalPathVars.get(name);
+                }
+                // Sinon chercher dans les query parameters
+                return originalReq.getParameter(name);
+            }
+        };
+        
         // Vérification du type de retour de la méthode
         try {
             Method method = methodInfo.getMethod();
@@ -122,8 +139,29 @@ public class FrontServlet extends HttpServlet {
             // Instanciation du contrôleur
             Object controllerInstance = methodInfo.getControllerClass().getDeclaredConstructor().newInstance();
             
-            // Invocation de la méthode
-            Object result = method.invoke(controllerInstance);
+            // Préparation des arguments de la méthode depuis request.getParameter()
+            List<String> paramNames = methodInfo.getParameterNames();
+            List<Class<?>> paramTypes = methodInfo.getParameterTypes();
+            List<String> paramKeys = methodInfo.getParameterKeys();
+            Object[] args = new Object[paramNames.size()];
+            
+            for (int i = 0; i < paramNames.size(); i++) {
+                String paramName = paramNames.get(i);
+                String paramKey = (paramKeys != null && i < paramKeys.size()) ? paramKeys.get(i) : null;
+                
+                // D'abord essayer avec le nom du paramètre, puis avec la clé @RequestParameter
+                // Utiliser wrappedReq qui inclut les path variables
+                String paramValue = wrappedReq.getParameter(paramName);
+                if (paramValue == null && paramKey != null) {
+                    paramValue = wrappedReq.getParameter(paramKey);
+                }
+                
+                // Tous les paramètres sont String (validé au scan)
+                args[i] = paramValue;
+            }
+            
+            // Invocation de la méthode avec les arguments extraits
+            Object result = method.invoke(controllerInstance, args);
             
             // Gestion selon le type de retour
             if (returnType.equals(String.class)) {
