@@ -18,6 +18,8 @@ import java.lang.reflect.Method;
 import java.util.Map;
 import java.util.List;
 import java.util.HashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @WebServlet(name = "FrontServlet", urlPatterns = {"/"}, loadOnStartup = 1)
 public class FrontServlet extends HttpServlet {
@@ -67,8 +69,45 @@ public class FrontServlet extends HttpServlet {
 
 // /build/Front§Servlet mets au moment ou on sait que ca retourne un model view, il faut faire e sorte que ca verfiei si model a des donnees si oui ben aficher aussi dans le view contenu dans getView
         
-        // Recherche du mapping (d'abord avec la méthode HTTP spécifique, puis avec ANY)
+        // Recherche du mapping : exact -> ANY -> patterns avec variables {id}
         ControllerScanner.MethodInfo methodInfo = mappings.get(key);
+        Map<String, String> pathVariables = new HashMap<>();
+        
+        // Essayer la clé ANY exact
+        if (methodInfo == null) {
+            String anyKey = "ANY:" + path;
+            methodInfo = mappings.get(anyKey);
+        }
+        
+        // Si toujours null, essayer de matcher les patterns (ex: /employe/{id})
+        if (methodInfo == null) {
+            for (Map.Entry<String, ControllerScanner.MethodInfo> entry : mappings.entrySet()) {
+                String mapKey = entry.getKey();
+                // Garder uniquement les mappings pour la même méthode ou ANY
+                if (!(mapKey.startsWith(httpMethod + ":") || mapKey.startsWith("ANY:"))) {
+                    continue;
+                }
+                
+                ControllerScanner.MethodInfo mi = entry.getValue();
+                Pattern p = mi.getPathPattern();
+                if (p == null) continue;
+                
+                Matcher matcher = p.matcher(path);
+                if (matcher.matches()) {
+                    methodInfo = mi;
+                    // Extraire les variables de chemin et les stocker
+                    List<String> names = mi.getPathParamNames();
+                    if (names != null) {
+                        for (int i = 0; i < names.size(); i++) {
+                            String paramName = names.get(i);
+                            String value = matcher.group(i + 1);
+                            pathVariables.put(paramName, value);
+                        }
+                    }
+                    break;
+                }
+            }
+        }
         
         if (methodInfo == null) {
             PrintWriter out = resp.getWriter();
@@ -77,6 +116,21 @@ public class FrontServlet extends HttpServlet {
             out.print("</body></html>");
             return;
         }
+        
+        // Wrapper de requête pour rendre les path variables accessibles via getParameter()
+        final HttpServletRequest originalReq = req;
+        final Map<String, String> finalPathVars = pathVariables;
+        HttpServletRequest wrappedReq = new jakarta.servlet.http.HttpServletRequestWrapper(req) {
+            @Override
+            public String getParameter(String name) {
+                // D'abord chercher dans les path variables
+                if (finalPathVars.containsKey(name)) {
+                    return finalPathVars.get(name);
+                }
+                // Sinon chercher dans les query parameters
+                return originalReq.getParameter(name);
+            }
+        };
         
         // Vérification du type de retour de la méthode
         try {
@@ -94,35 +148,17 @@ public class FrontServlet extends HttpServlet {
             
             for (int i = 0; i < paramNames.size(); i++) {
                 String paramName = paramNames.get(i);
-                Class<?> paramType = paramTypes.get(i);
                 String paramKey = (paramKeys != null && i < paramKeys.size()) ? paramKeys.get(i) : null;
                 
                 // D'abord essayer avec le nom du paramètre, puis avec la clé @RequestParameter
-                String paramValue = req.getParameter(paramName);
+                // Utiliser wrappedReq qui inclut les path variables
+                String paramValue = wrappedReq.getParameter(paramName);
                 if (paramValue == null && paramKey != null) {
-                    paramValue = req.getParameter(paramKey);
+                    paramValue = wrappedReq.getParameter(paramKey);
                 }
                 
-                // Conversion simple selon le type
-                if (paramValue != null) {
-                    if (paramType == String.class) {
-                        args[i] = paramValue;
-                    } else if (paramType == int.class || paramType == Integer.class) {
-                        args[i] = Integer.parseInt(paramValue);
-                    } else if (paramType == long.class || paramType == Long.class) {
-                        args[i] = Long.parseLong(paramValue);
-                    } else if (paramType == double.class || paramType == Double.class) {
-                        args[i] = Double.parseDouble(paramValue);
-                    } else if (paramType == boolean.class || paramType == Boolean.class) {
-                        args[i] = Boolean.parseBoolean(paramValue);
-                    } else {
-                        // Type non supporté, laisser null
-                        args[i] = null;
-                    }
-                } else {
-                    // Paramètre absent, mettre null ou valeur par défaut
-                    args[i] = null;
-                }
+                // Tous les paramètres sont String (validé au scan)
+                args[i] = paramValue;
             }
             
             // Invocation de la méthode avec les arguments extraits

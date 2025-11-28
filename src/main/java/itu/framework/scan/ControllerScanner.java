@@ -10,6 +10,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Scanner qui détecte les contrôleurs et leurs mappings
@@ -28,6 +30,12 @@ public class ControllerScanner {
         private List<Class<?>> parameterTypes;
         // Liste des clés RequestParameter (null si pas d'annotation)
         private List<String> parameterKeys;
+        // Pattern pour matcher les URL avec variables ex: /employe/{id}
+        private Pattern pathPattern;
+        // Noms des variables de chemin dans l'ordre
+        private List<String> pathParamNames;
+        // L'URL telle qu'annotée (ex: /employe/{id})
+        private String urlPattern;
         
         public MethodInfo(Class<?> controllerClass, Method method) {
             this.controllerClass = controllerClass;
@@ -35,6 +43,7 @@ public class ControllerScanner {
             this.parameterNames = new ArrayList<>();
             this.parameterTypes = new ArrayList<>();
             this.parameterKeys = new ArrayList<>();
+            this.pathParamNames = new ArrayList<>();
         }
         
         public Class<?> getControllerClass() {
@@ -67,6 +76,30 @@ public class ControllerScanner {
         
         public void setParameterKeys(List<String> parameterKeys) {
             this.parameterKeys = parameterKeys;
+        }
+        
+        public Pattern getPathPattern() {
+            return pathPattern;
+        }
+        
+        public void setPathPattern(Pattern pathPattern) {
+            this.pathPattern = pathPattern;
+        }
+        
+        public List<String> getPathParamNames() {
+            return pathParamNames;
+        }
+        
+        public void setPathParamNames(List<String> pathParamNames) {
+            this.pathParamNames = pathParamNames;
+        }
+        
+        public String getUrlPattern() {
+            return urlPattern;
+        }
+        
+        public void setUrlPattern(String urlPattern) {
+            this.urlPattern = urlPattern;
         }
     }
     
@@ -115,6 +148,23 @@ public class ControllerScanner {
                 String key = httpMethod + ":" + url;
                 
                 MethodInfo methodInfo = new MethodInfo(controllerClass, method);
+                methodInfo.setUrlPattern(url);
+                
+                // Détecter des variables de chemin {name} et construire un Pattern
+                if (url.contains("{")) {
+                    List<String> pathParams = new ArrayList<>();
+                    Matcher m = Pattern.compile("\\{([^/}]+)\\}").matcher(url);
+                    while (m.find()) {
+                        pathParams.add(m.group(1));
+                    }
+                    
+                    // Remplacer {name} par un groupe capture ([^/]+)
+                    String regex = "^" + url.replaceAll("\\{[^/}]+\\}", "([^/]+)") + "$";
+                    Pattern pathPattern = Pattern.compile(regex);
+                    
+                    methodInfo.setPathParamNames(pathParams);
+                    methodInfo.setPathPattern(pathPattern);
+                }
                 
                 // Extraction des paramètres de la méthode
                 Parameter[] parameters = method.getParameters();
@@ -123,6 +173,16 @@ public class ControllerScanner {
                 List<String> paramKeys = new ArrayList<>();
                 
                 for (Parameter param : parameters) {
+                    // VALIDATION: Tous les paramètres doivent être de type String
+                    if (param.getType() != String.class) {
+                        throw new IllegalArgumentException(
+                            "[ControllerScanner] ERREUR: La méthode " + controllerClass.getSimpleName() + 
+                            "." + method.getName() + "() a un paramètre '" + param.getName() + 
+                            "' de type " + param.getType().getSimpleName() + 
+                            ". Tous les paramètres des méthodes annotées @Web doivent être de type String."
+                        );
+                    }
+                    
                     paramNames.add(param.getName());
                     paramTypes.add(param.getType());
                     
