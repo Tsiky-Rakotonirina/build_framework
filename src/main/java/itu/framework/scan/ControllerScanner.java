@@ -4,6 +4,8 @@ import itu.framework.annotation.Controller;
 import itu.framework.annotation.Web;
 
 import java.lang.reflect.Method;
+import java.lang.reflect.Parameter;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,10 +21,16 @@ public class ControllerScanner {
     public static class MethodInfo {
         private Class<?> controllerClass;
         private Method method;
+        // Liste des noms de paramètres de la méthode
+        private List<String> parameterNames;
+        // Liste des types de paramètres
+        private List<Class<?>> parameterTypes;
         
         public MethodInfo(Class<?> controllerClass, Method method) {
             this.controllerClass = controllerClass;
             this.method = method;
+            this.parameterNames = new ArrayList<>();
+            this.parameterTypes = new ArrayList<>();
         }
         
         public Class<?> getControllerClass() {
@@ -31,6 +39,22 @@ public class ControllerScanner {
         
         public Method getMethod() {
             return method;
+        }
+        
+        public List<String> getParameterNames() {
+            return parameterNames;
+        }
+        
+        public void setParameterNames(List<String> parameterNames) {
+            this.parameterNames = parameterNames;
+        }
+        
+        public List<Class<?>> getParameterTypes() {
+            return parameterTypes;
+        }
+        
+        public void setParameterTypes(List<Class<?>> parameterTypes) {
+            this.parameterTypes = parameterTypes;
         }
     }
     
@@ -79,10 +103,25 @@ public class ControllerScanner {
                 String key = httpMethod + ":" + url;
                 
                 MethodInfo methodInfo = new MethodInfo(controllerClass, method);
+                
+                // Extraction des paramètres de la méthode
+                Parameter[] parameters = method.getParameters();
+                List<String> paramNames = new ArrayList<>();
+                List<Class<?>> paramTypes = new ArrayList<>();
+                
+                for (Parameter param : parameters) {
+                    paramNames.add(param.getName());
+                    paramTypes.add(param.getType());
+                }
+                
+                methodInfo.setParameterNames(paramNames);
+                methodInfo.setParameterTypes(paramTypes);
+                
                 mappings.put(key, methodInfo);
                 
+                String paramInfo = paramNames.isEmpty() ? "()" : "(" + String.join(", ", paramNames) + ")";
                 System.out.println("[ControllerScanner] Mapping ajouté: " + key + 
-                                 " -> " + controllerClass.getSimpleName() + "." + method.getName() + "()");
+                                 " -> " + controllerClass.getSimpleName() + "." + method.getName() + paramInfo);
             }
         }
     }
