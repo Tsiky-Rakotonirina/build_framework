@@ -1,8 +1,9 @@
 package itu.framework.scan;
 
 import itu.framework.annotation.Controller;
+import itu.framework.annotation.HttpMethod;
 import itu.framework.annotation.RequestParameter;
-import itu.framework.annotation.Web;
+import itu.framework.annotation.Url;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
@@ -138,15 +139,24 @@ public class ControllerScanner {
         Method[] methods = controllerClass.getDeclaredMethods();
         
         for (Method method : methods) {
-            // Vérification pour @Web
-            if (method.isAnnotationPresent(Web.class)) {
-                Web webAnnotation = method.getAnnotation(Web.class);
-                String url = webAnnotation.value();
-                String httpMethod = webAnnotation.method().toUpperCase();
+            // Vérification pour @Url (obligatoire)
+            if (method.isAnnotationPresent(Url.class)) {
+                Url urlAnnotation = method.getAnnotation(Url.class);
+                String url = urlAnnotation.value();
                 
-                // Clé = "METHOD:URL"
-                String key = httpMethod + ":" + url;
+                // Vérifier si @HttpMethod est présent
+                HttpMethod httpMethodAnnotation = method.getAnnotation(HttpMethod.class);
+                String[] httpMethods;
                 
+                if (httpMethodAnnotation != null) {
+                    // Si @HttpMethod spécifié, utiliser uniquement cette méthode
+                    httpMethods = new String[] { httpMethodAnnotation.value().toUpperCase() };
+                } else {
+                    // Sinon, enregistrer pour GET et POST
+                    httpMethods = new String[] { "GET", "POST" };
+                }
+                
+                // Créer le MethodInfo une seule fois
                 MethodInfo methodInfo = new MethodInfo(controllerClass, method);
                 methodInfo.setUrlPattern(url);
                 
@@ -199,11 +209,15 @@ public class ControllerScanner {
                 methodInfo.setParameterTypes(paramTypes);
                 methodInfo.setParameterKeys(paramKeys);
                 
-                mappings.put(key, methodInfo);
-                
-                String paramInfo = paramNames.isEmpty() ? "()" : "(" + String.join(", ", paramNames) + ")";
-                System.out.println("[ControllerScanner] Mapping ajouté: " + key + 
-                                 " -> " + controllerClass.getSimpleName() + "." + method.getName() + paramInfo);
+                // Enregistrer pour chaque méthode HTTP
+                for (String httpMethod : httpMethods) {
+                    String key = httpMethod + ":" + url;
+                    mappings.put(key, methodInfo);
+                    
+                    String paramInfo = paramNames.isEmpty() ? "()" : "(" + String.join(", ", paramNames) + ")";
+                    System.out.println("[ControllerScanner] Mapping ajouté: " + key + 
+                                     " -> " + controllerClass.getSimpleName() + "." + method.getName() + paramInfo);
+                }
             }
         }
     }
