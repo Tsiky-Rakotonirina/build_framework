@@ -86,8 +86,47 @@ public class FrontServlet extends HttpServlet {
             // Instanciation du contrôleur
             Object controllerInstance = methodInfo.getControllerClass().getDeclaredConstructor().newInstance();
             
-            // Invocation de la méthode
-            Object result = method.invoke(controllerInstance);
+            // Préparation des arguments de la méthode depuis request.getParameter()
+            List<String> paramNames = methodInfo.getParameterNames();
+            List<Class<?>> paramTypes = methodInfo.getParameterTypes();
+            List<String> paramKeys = methodInfo.getParameterKeys();
+            Object[] args = new Object[paramNames.size()];
+            
+            for (int i = 0; i < paramNames.size(); i++) {
+                String paramName = paramNames.get(i);
+                Class<?> paramType = paramTypes.get(i);
+                String paramKey = (paramKeys != null && i < paramKeys.size()) ? paramKeys.get(i) : null;
+                
+                // D'abord essayer avec le nom du paramètre, puis avec la clé @RequestParameter
+                String paramValue = req.getParameter(paramName);
+                if (paramValue == null && paramKey != null) {
+                    paramValue = req.getParameter(paramKey);
+                }
+                
+                // Conversion simple selon le type
+                if (paramValue != null) {
+                    if (paramType == String.class) {
+                        args[i] = paramValue;
+                    } else if (paramType == int.class || paramType == Integer.class) {
+                        args[i] = Integer.parseInt(paramValue);
+                    } else if (paramType == long.class || paramType == Long.class) {
+                        args[i] = Long.parseLong(paramValue);
+                    } else if (paramType == double.class || paramType == Double.class) {
+                        args[i] = Double.parseDouble(paramValue);
+                    } else if (paramType == boolean.class || paramType == Boolean.class) {
+                        args[i] = Boolean.parseBoolean(paramValue);
+                    } else {
+                        // Type non supporté, laisser null
+                        args[i] = null;
+                    }
+                } else {
+                    // Paramètre absent, mettre null ou valeur par défaut
+                    args[i] = null;
+                }
+            }
+            
+            // Invocation de la méthode avec les arguments extraits
+            Object result = method.invoke(controllerInstance, args);
             
             // Gestion selon le type de retour
             if (returnType.equals(String.class)) {
