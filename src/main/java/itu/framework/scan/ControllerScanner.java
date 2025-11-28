@@ -4,9 +4,12 @@ import itu.framework.annotation.Controller;
 import itu.framework.annotation.Web;
 
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Scanner qui détecte les contrôleurs et leurs mappings
@@ -19,10 +22,17 @@ public class ControllerScanner {
     public static class MethodInfo {
         private Class<?> controllerClass;
         private Method method;
+        // Pattern pour matcher les URL avec variables ex: /employe/{id}
+        private Pattern pathPattern;
+        // Noms des variables dans l'ordre
+        private List<String> pathParamNames;
+        // L'URL telle qu'annotée (ex: /employe/{id})
+        private String urlPattern;
         
         public MethodInfo(Class<?> controllerClass, Method method) {
             this.controllerClass = controllerClass;
             this.method = method;
+            this.pathParamNames = new ArrayList<>();
         }
         
         public Class<?> getControllerClass() {
@@ -32,6 +42,26 @@ public class ControllerScanner {
         public Method getMethod() {
             return method;
         }
+
+        public Pattern getPathPattern() {
+            return pathPattern;
+        }
+
+        public void setPathPattern(Pattern pathPattern) {
+            this.pathPattern = pathPattern;
+        }
+
+        public List<String> getPathParamNames() {
+            return pathParamNames;
+        }
+
+        public void setPathParamNames(List<String> pathParamNames) {
+            this.pathParamNames = pathParamNames;
+        }
+
+        public String getUrlPattern() { return urlPattern; }
+
+        public void setUrlPattern(String urlPattern) { this.urlPattern = urlPattern; }
     }
     
     /**
@@ -74,13 +104,31 @@ public class ControllerScanner {
                 Web webAnnotation = method.getAnnotation(Web.class);
                 String url = webAnnotation.value();
                 String httpMethod = webAnnotation.method().toUpperCase();
-                
-                // Clé = "METHOD:URL"
+
+                // Clé = "METHOD:URL" (la key contient la pattern telle qu'annotée, ex: /employe/{id})
                 String key = httpMethod + ":" + url;
-                
+
                 MethodInfo methodInfo = new MethodInfo(controllerClass, method);
+                methodInfo.setUrlPattern(url);
+
+                // Détecter des variables de chemin {name} et construire un Pattern
+                if (url.contains("{")) {
+                    List<String> paramNames = new ArrayList<>();
+                    Matcher m = Pattern.compile("\\{([^/}]+)\\}").matcher(url);
+                    while (m.find()) {
+                        paramNames.add(m.group(1));
+                    }
+
+                    // Remplacer {name} par un groupe catch-all (sans slash)
+                    String regex = "^" + url.replaceAll("\\{[^/}]+\\}", "([^/]+)") + "$";
+                    Pattern pathPattern = Pattern.compile(regex);
+
+                    methodInfo.setPathParamNames(paramNames);
+                    methodInfo.setPathPattern(pathPattern);
+                }
+
                 mappings.put(key, methodInfo);
-                
+
                 System.out.println("[ControllerScanner] Mapping ajouté: " + key + 
                                  " -> " + controllerClass.getSimpleName() + "." + method.getName() + "()");
             }

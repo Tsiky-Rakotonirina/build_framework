@@ -14,6 +14,10 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.lang.reflect.Method;
 import java.util.Map;
+import java.util.List;
+import java.util.HashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @WebServlet(name = "FrontServlet", urlPatterns = {"/"}, loadOnStartup = 1)
 public class FrontServlet extends HttpServlet {
@@ -57,9 +61,45 @@ public class FrontServlet extends HttpServlet {
             return;
         }
         
-        // Recherche du mapping (d'abord avec la méthode HTTP spécifique, puis avec ANY)
+        // Recherche du mapping : exact -> ANY -> patterns avec variables {id}
         ControllerScanner.MethodInfo methodInfo = mappings.get(key);
-        
+
+        // Essayer la clé ANY exact
+        if (methodInfo == null) {
+            String anyKey = "ANY:" + path;
+            methodInfo = mappings.get(anyKey);
+        }
+
+        // Si toujours null, essayer de matcher les patterns enregistrés (ex: /employe/{id})
+        if (methodInfo == null) {
+            for (Map.Entry<String, ControllerScanner.MethodInfo> entry : mappings.entrySet()) {
+                String mapKey = entry.getKey();
+                // garder uniquement les mappings pour la même méthode ou ANY
+                if (!(mapKey.startsWith(httpMethod + ":") || mapKey.startsWith("ANY:"))) {
+                    continue;
+                }
+
+                ControllerScanner.MethodInfo mi = entry.getValue();
+                Pattern p = mi.getPathPattern();
+                if (p == null) continue;
+
+                Matcher matcher = p.matcher(path);
+                if (matcher.matches()) {
+                    methodInfo = mi;
+                    // extraire les variables de chemin et les mettre en attributs de requête
+                    List<String> names = mi.getPathParamNames();
+                    if (names != null) {
+                        for (int i = 0; i < names.size(); i++) {
+                            String paramName = names.get(i);
+                            String value = matcher.group(i + 1);
+                            req.setAttribute(paramName, value);
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+
         if (methodInfo == null) {
             PrintWriter out = resp.getWriter();
             out.print("<html><body>");
@@ -85,9 +125,26 @@ public class FrontServlet extends HttpServlet {
                 PrintWriter out = resp.getWriter();
                 out.print((String) result);
             } else if (returnType.equals(ModelView.class)) {
-                // Si ModelView, faire un dispatcher
+                // Si ModelView, injecter les données (si présentes) puis forward
                 ModelView modelView = (ModelView) result;
+
+                // Injecter les données du model si présentes
+                List<HashMap<String, Object>> modelList = modelView.getModelList();
+                if (modelList != null && !modelList.isEmpty()) {
+                    for (HashMap<String, Object> map : modelList) {
+                        if (map != null) {
+                            for (Map.Entry<String, Object> e : map.entrySet()) {
+                                req.setAttribute(e.getKey(), e.getValue());
+                            }
+                        }
+                    }
+                    req.setAttribute("model", modelList);
+                }
+
                 String viewPath = modelView.getView();
+                if (!viewPath.startsWith("/")) {
+                    viewPath = "/" + viewPath;
+                }
                 RequestDispatcher dispatcher = req.getRequestDispatcher(viewPath);
                 dispatcher.forward(req, resp);
             } else {
