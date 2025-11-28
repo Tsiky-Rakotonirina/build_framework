@@ -2,8 +2,10 @@ package itu.framework.servlet;
 
 import itu.framework.listener.FrameworkListener;
 import itu.framework.scan.ControllerScanner;
+import itu.framework.scan.ControllerScanner.MethodInfo;
 import itu.framework.scan.ModelView;
 import jakarta.servlet.RequestDispatcher;
+import jakarta.servlet.Servlet;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.HttpServlet;
@@ -16,8 +18,6 @@ import java.lang.reflect.Method;
 import java.util.Map;
 import java.util.List;
 import java.util.HashMap;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 @WebServlet(name = "FrontServlet", urlPatterns = {"/"}, loadOnStartup = 1)
 public class FrontServlet extends HttpServlet {
@@ -60,6 +60,12 @@ public class FrontServlet extends HttpServlet {
             out.print("</body></html>");
             return;
         }
+
+//         change dans /build/scan le modelView en liste de Hashmap
+
+// ensuite utilise le dans /use/java/testController au niveau de /hello
+
+// /build/Front§Servlet mets au moment ou on sait que ca retourne un model view, il faut faire e sorte que ca verfiei si model a des donnees si oui ben aficher aussi dans le view contenu dans getView
         
         // Recherche du mapping : exact -> ANY -> patterns avec variables {id}
         ControllerScanner.MethodInfo methodInfo = mappings.get(key);
@@ -125,11 +131,11 @@ public class FrontServlet extends HttpServlet {
                 PrintWriter out = resp.getWriter();
                 out.print((String) result);
             } else if (returnType.equals(ModelView.class)) {
-                // Si ModelView, injecter les données (si présentes) puis forward
+                // Si ModelView, faire un dispatcher et injecter les données si présentes
                 ModelView modelView = (ModelView) result;
-
-                // Injecter les données du model si présentes
                 List<HashMap<String, Object>> modelList = modelView.getModelList();
+
+                // Injecter chaque paire clé/valeur comme attribut de requête
                 if (modelList != null && !modelList.isEmpty()) {
                     for (HashMap<String, Object> map : modelList) {
                         if (map != null) {
@@ -138,6 +144,7 @@ public class FrontServlet extends HttpServlet {
                             }
                         }
                     }
+                    // Mettre aussi la liste entière sous l'attribut 'model'
                     req.setAttribute("model", modelList);
                 }
 
