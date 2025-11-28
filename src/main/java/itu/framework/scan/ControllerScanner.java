@@ -6,6 +6,7 @@ import itu.framework.annotation.RequestParameter;
 import itu.framework.annotation.Url;
 
 import java.lang.reflect.Method;
+import java.lang.reflect.Parameter;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -24,6 +25,12 @@ public class ControllerScanner {
     public static class MethodInfo {
         private Class<?> controllerClass;
         private Method method;
+        // Liste des noms de paramètres de la méthode
+        private List<String> parameterNames;
+        // Liste des types de paramètres
+        private List<Class<?>> parameterTypes;
+        // Liste des clés RequestParameter (null si pas d'annotation)
+        private List<String> parameterKeys;
         // Pattern pour matcher les URL avec variables ex: /employe/{id}
         private Pattern pathPattern;
         // Noms des variables dans l'ordre
@@ -34,6 +41,9 @@ public class ControllerScanner {
         public MethodInfo(Class<?> controllerClass, Method method) {
             this.controllerClass = controllerClass;
             this.method = method;
+            this.parameterNames = new ArrayList<>();
+            this.parameterTypes = new ArrayList<>();
+            this.parameterKeys = new ArrayList<>();
             this.pathParamNames = new ArrayList<>();
         }
         
@@ -43,6 +53,30 @@ public class ControllerScanner {
         
         public Method getMethod() {
             return method;
+        }
+        
+        public List<String> getParameterNames() {
+            return parameterNames;
+        }
+        
+        public void setParameterNames(List<String> parameterNames) {
+            this.parameterNames = parameterNames;
+        }
+        
+        public List<Class<?>> getParameterTypes() {
+            return parameterTypes;
+        }
+        
+        public void setParameterTypes(List<Class<?>> parameterTypes) {
+            this.parameterTypes = parameterTypes;
+        }
+        
+        public List<String> getParameterKeys() {
+            return parameterKeys;
+        }
+        
+        public void setParameterKeys(List<String> parameterKeys) {
+            this.parameterKeys = parameterKeys;
         }
 
         public Pattern getPathPattern() {
@@ -101,38 +135,85 @@ public class ControllerScanner {
         Method[] methods = controllerClass.getDeclaredMethods();
         
         for (Method method : methods) {
-            // Vérification pour @Web
-            if (method.isAnnotationPresent(Web.class)) {
-                Web webAnnotation = method.getAnnotation(Web.class);
-                String url = webAnnotation.value();
-                String httpMethod = webAnnotation.method().toUpperCase();
-
-                // Clé = "METHOD:URL" (la key contient la pattern telle qu'annotée, ex: /employe/{id})
-                String key = httpMethod + ":" + url;
-
+            // Vérification pour @Url (obligatoire)
+            if (method.isAnnotationPresent(Url.class)) {
+                Url urlAnnotation = method.getAnnotation(Url.class);
+                String url = urlAnnotation.value();
+                
+                // Vérifier si @HttpMethod est présent
+                HttpMethod httpMethodAnnotation = method.getAnnotation(HttpMethod.class);
+                String[] httpMethods;
+                
+                if (httpMethodAnnotation != null) {
+                    // Si @HttpMethod spécifié, utiliser uniquement cette méthode
+                    httpMethods = new String[] { httpMethodAnnotation.value().toUpperCase() };
+                } else {
+                    // Sinon, enregistrer pour GET et POST
+                    httpMethods = new String[] { "GET", "POST" };
+                }
+                
+                // Créer le MethodInfo une seule fois
                 MethodInfo methodInfo = new MethodInfo(controllerClass, method);
                 methodInfo.setUrlPattern(url);
 
                 // Détecter des variables de chemin {name} et construire un Pattern
                 if (url.contains("{")) {
-                    List<String> paramNames = new ArrayList<>();
+                    List<String> pathParams = new ArrayList<>();
                     Matcher m = Pattern.compile("\\{([^/}]+)\\}").matcher(url);
                     while (m.find()) {
-                        paramNames.add(m.group(1));
+                        pathParams.add(m.group(1));
                     }
 
-                    // Remplacer {name} par un groupe catch-all (sans slash)
+                    // Remplacer {name} par un groupe capture ([^/]+)
                     String regex = "^" + url.replaceAll("\\{[^/}]+\\}", "([^/]+)") + "$";
                     Pattern pathPattern = Pattern.compile(regex);
 
-                    methodInfo.setPathParamNames(paramNames);
+                    methodInfo.setPathParamNames(pathParams);
                     methodInfo.setPathPattern(pathPattern);
                 }
+                
+                // Extraction des paramètres de la méthode
+                Parameter[] parameters = method.getParameters();
+                List<String> paramNames = new ArrayList<>();
+                List<Class<?>> paramTypes = new ArrayList<>();
+                List<String> paramKeys = new ArrayList<>();
+                
+                for (Parameter param : parameters) {
+                    // VALIDATION: Tous les paramètres doivent être de type String
+                    if (param.getType() != String.class) {
+                        throw new IllegalArgumentException(
+                            "[ControllerScanner] ERREUR: La méthode " + controllerClass.getSimpleName() + 
+                            "." + method.getName() + "() a un paramètre '" + param.getName() + 
+                            "' de type " + param.getType().getSimpleName() + 
+                            ". Tous les paramètres des méthodes annotées @Url doivent être de type String."
+                        );
+                    }
+                    
+                    paramNames.add(param.getName());
+                    paramTypes.add(param.getType());
+                    
+                    // Vérifier si le paramètre a l'annotation @RequestParameter
+                    RequestParameter reqParam = param.getAnnotation(RequestParameter.class);
+                    if (reqParam != null) {
+                        paramKeys.add(reqParam.key());
+                    } else {
+                        paramKeys.add(null);
+                    }
+                }
+                
+                methodInfo.setParameterNames(paramNames);
+                methodInfo.setParameterTypes(paramTypes);
+                methodInfo.setParameterKeys(paramKeys);
 
-                mappings.put(key, methodInfo);
-
-                System.out.println("[ControllerScanner] Mapping ajouté: " + key + 
-                                 " -> " + controllerClass.getSimpleName() + "." + method.getName() + "()");
+                // Enregistrer pour chaque méthode HTTP
+                for (String httpMethod : httpMethods) {
+                    String key = httpMethod + ":" + url;
+                    mappings.put(key, methodInfo);
+                    
+                    String paramInfo = paramNames.isEmpty() ? "()" : "(" + String.join(", ", paramNames) + ")";
+                    System.out.println("[ControllerScanner] Mapping ajouté: " + key + 
+                                     " -> " + controllerClass.getSimpleName() + "." + method.getName() + paramInfo);
+                }
             }
         }
     }
