@@ -1,6 +1,7 @@
 package itu.framework.scan;
 
 import itu.framework.annotation.Controller;
+import itu.framework.annotation.RequestParameter;
 import itu.framework.annotation.Web;
 
 import java.lang.reflect.Method;
@@ -25,12 +26,15 @@ public class ControllerScanner {
         private List<String> parameterNames;
         // Liste des types de paramètres
         private List<Class<?>> parameterTypes;
+        // Liste des clés RequestParameter (null si pas d'annotation)
+        private List<String> parameterKeys;
         
         public MethodInfo(Class<?> controllerClass, Method method) {
             this.controllerClass = controllerClass;
             this.method = method;
             this.parameterNames = new ArrayList<>();
             this.parameterTypes = new ArrayList<>();
+            this.parameterKeys = new ArrayList<>();
         }
         
         public Class<?> getControllerClass() {
@@ -55,6 +59,14 @@ public class ControllerScanner {
         
         public void setParameterTypes(List<Class<?>> parameterTypes) {
             this.parameterTypes = parameterTypes;
+        }
+        
+        public List<String> getParameterKeys() {
+            return parameterKeys;
+        }
+        
+        public void setParameterKeys(List<String> parameterKeys) {
+            this.parameterKeys = parameterKeys;
         }
     }
     
@@ -108,14 +120,24 @@ public class ControllerScanner {
                 Parameter[] parameters = method.getParameters();
                 List<String> paramNames = new ArrayList<>();
                 List<Class<?>> paramTypes = new ArrayList<>();
+                List<String> paramKeys = new ArrayList<>();
                 
                 for (Parameter param : parameters) {
                     paramNames.add(param.getName());
                     paramTypes.add(param.getType());
+                    
+                    // Vérifier si le paramètre a l'annotation @RequestParameter
+                    RequestParameter reqParam = param.getAnnotation(RequestParameter.class);
+                    if (reqParam != null) {
+                        paramKeys.add(reqParam.key());
+                    } else {
+                        paramKeys.add(null);
+                    }
                 }
                 
                 methodInfo.setParameterNames(paramNames);
                 methodInfo.setParameterTypes(paramTypes);
+                methodInfo.setParameterKeys(paramKeys);
                 
                 mappings.put(key, methodInfo);
                 
