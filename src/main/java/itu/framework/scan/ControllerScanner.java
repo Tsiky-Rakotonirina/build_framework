@@ -137,6 +137,22 @@ public class ControllerScanner {
         for (Method method : methods) {
             // Vérification pour @Url (obligatoire)
             if (method.isAnnotationPresent(Url.class)) {
+                // VALIDATION: La méthode ne doit pas être statique
+                if (java.lang.reflect.Modifier.isStatic(method.getModifiers())) {
+                    throw new IllegalArgumentException(
+                        "[ControllerScanner] ERREUR: La méthode " + controllerClass.getSimpleName() + 
+                        "." + method.getName() + "() annotée @Url ne peut pas être statique."
+                    );
+                }
+                
+                // VALIDATION: La méthode doit être publique
+                if (!java.lang.reflect.Modifier.isPublic(method.getModifiers())) {
+                    throw new IllegalArgumentException(
+                        "[ControllerScanner] ERREUR: La méthode " + controllerClass.getSimpleName() + 
+                        "." + method.getName() + "() annotée @Url doit être publique."
+                    );
+                }
+                
                 Url urlAnnotation = method.getAnnotation(Url.class);
                 String url = urlAnnotation.value();
                 
@@ -178,19 +194,37 @@ public class ControllerScanner {
                 List<Class<?>> paramTypes = new ArrayList<>();
                 List<String> paramKeys = new ArrayList<>();
                 
+                boolean hasMapParam = false;
+                
                 for (Parameter param : parameters) {
-                    // VALIDATION: Tous les paramètres doivent être de type String
-                    if (param.getType() != String.class) {
+                    Class<?> paramType = param.getType();
+                    
+                    // VALIDATION: String, Map<String, Object> OU classes POJO personnalisées
+                    if (paramType == String.class) {
+                        // OK - String accepté
+                    } else if (paramType == Map.class || paramType == HashMap.class) {
+                        // Vérifier qu'il n'y a qu'un seul Map
+                        if (hasMapParam) {
+                            throw new IllegalArgumentException(
+                                "[ControllerScanner] ERREUR: La méthode " + controllerClass.getSimpleName() + 
+                                "." + method.getName() + "() ne peut avoir qu'UN SEUL paramètre de type Map."
+                            );
+                        }
+                        hasMapParam = true;
+                    } else if (paramType.isPrimitive() || paramType.isArray() || paramType.isInterface()) {
+                        // Interdire les types primitifs, tableaux, interfaces
                         throw new IllegalArgumentException(
                             "[ControllerScanner] ERREUR: La méthode " + controllerClass.getSimpleName() + 
                             "." + method.getName() + "() a un paramètre '" + param.getName() + 
-                            "' de type " + param.getType().getSimpleName() + 
-                            ". Tous les paramètres des méthodes annotées @Url doivent être de type String."
+                            "' de type " + paramType.getSimpleName() + 
+                            ". Les paramètres doivent être String, Map ou des classes POJO."
                         );
+                    } else {
+                        // OK - Classe POJO personnalisée (sprint 8 bis)
                     }
                     
                     paramNames.add(param.getName());
-                    paramTypes.add(param.getType());
+                    paramTypes.add(paramType);
                     
                     // Vérifier si le paramètre a l'annotation @RequestParameter
                     RequestParameter reqParam = param.getAnnotation(RequestParameter.class);
@@ -208,6 +242,18 @@ public class ControllerScanner {
                 // Enregistrer pour chaque méthode HTTP
                 for (String httpMethod : httpMethods) {
                     String key = httpMethod + ":" + url;
+                    
+                    // VALIDATION: Vérifier les URL dupliquées
+                    if (mappings.containsKey(key)) {
+                        MethodInfo existing = mappings.get(key);
+                        throw new IllegalArgumentException(
+                            "[ControllerScanner] ERREUR: L'URL '" + url + "' pour la méthode HTTP '" + httpMethod + 
+                            "' est déjà mappée par " + existing.getControllerClass().getSimpleName() + 
+                            "." + existing.getMethod().getName() + "(). Conflit avec " + 
+                            controllerClass.getSimpleName() + "." + method.getName() + "()."
+                        );
+                    }
+                    
                     mappings.put(key, methodInfo);
                     
                     String paramInfo = paramNames.isEmpty() ? "()" : "(" + String.join(", ", paramNames) + ")";
