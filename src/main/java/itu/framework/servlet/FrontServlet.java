@@ -62,13 +62,7 @@ public class FrontServlet extends HttpServlet {
             out.print("</body></html>");
             return;
         }
-
-//         change dans /build/scan le modelView en liste de Hashmap
-
-// ensuite utilise le dans /use/java/testController au niveau de /hello
-
-// /build/Front§Servlet mets au moment ou on sait que ca retourne un model view, il faut faire e sorte que ca verfiei si model a des donnees si oui ben aficher aussi dans le view contenu dans getView
-        
+  
         // Recherche du mapping : exact -> ANY -> patterns avec variables {id}
         ControllerScanner.MethodInfo methodInfo = mappings.get(key);
 
@@ -116,21 +110,6 @@ public class FrontServlet extends HttpServlet {
             return;
         }
         
-        // Wrapper de requête pour rendre les path variables accessibles via getParameter()
-        final HttpServletRequest originalReq = req;
-        final Map<String, String> finalPathVars = pathVariables;
-        HttpServletRequest wrappedReq = new jakarta.servlet.http.HttpServletRequestWrapper(req) {
-            @Override
-            public String getParameter(String name) {
-                // D'abord chercher dans les path variables
-                if (finalPathVars.containsKey(name)) {
-                    return finalPathVars.get(name);
-                }
-                // Sinon chercher dans les query parameters
-                return originalReq.getParameter(name);
-            }
-        };
-        
         // Vérification du type de retour de la méthode
         try {
             Method method = methodInfo.getMethod();
@@ -147,17 +126,73 @@ public class FrontServlet extends HttpServlet {
             
             for (int i = 0; i < paramNames.size(); i++) {
                 String paramName = paramNames.get(i);
+                Class<?> paramType = paramTypes.get(i);
                 String paramKey = (paramKeys != null && i < paramKeys.size()) ? paramKeys.get(i) : null;
                 
-                // D'abord essayer avec le nom du paramètre, puis avec la clé @RequestParameter
-                // Utiliser wrappedReq qui inclut les path variables
-                String paramValue = wrappedReq.getParameter(paramName);
-                if (paramValue == null && paramKey != null) {
-                    paramValue = wrappedReq.getParameter(paramKey);
+                // Si c'est un Map, remplir avec tous les paramètres HTTP
+                if (paramType == Map.class || paramType == HashMap.class) {
+                    Map<String, Object> allParams = new HashMap<>();
+                    
+                    // Récupérer tous les paramètres de la requête
+                    java.util.Enumeration<String> parameterNames = req.getParameterNames();
+                    while (parameterNames.hasMoreElements()) {
+                        String paramKey2 = parameterNames.nextElement();
+                        String value = req.getParameter(paramKey2);
+                        allParams.put(paramKey2, value);
+                    }
+                    
+                    args[i] = allParams;
+                } else if (paramType == String.class) {
+                    // Si String, chercher par nom puis par @RequestParameter key
+                    String paramValue = req.getParameter(paramName);
+                    if (paramValue == null && paramKey != null) {
+                        paramValue = req.getParameter(paramKey);
+                    }
+                    args[i] = paramValue;
+                } else {
+                    // Sprint 8 bis: POJO parameter binding
+                    // Chercher les paramètres de la forme "paramName.field"
+                    Object pojoInstance = paramType.getDeclaredConstructor().newInstance();
+                    
+                    // Récupérer tous les paramètres HTTP
+                    java.util.Enumeration<String> parameterNames = req.getParameterNames();
+                    while (parameterNames.hasMoreElements()) {
+                        String httpParamName = parameterNames.nextElement();
+                        
+                        // Vérifier si le paramètre commence par "paramName."
+                        String prefix = paramName + ".";
+                        if (httpParamName.startsWith(prefix)) {
+                            String fieldName = httpParamName.substring(prefix.length());
+                            String fieldValue = req.getParameter(httpParamName);
+                            
+                            // Utiliser la réflexion pour définir la valeur du champ
+                            try {
+                                java.lang.reflect.Field field = paramType.getDeclaredField(fieldName);
+                                field.setAccessible(true);
+                                
+                                // Conversion de type selon le type du champ
+                                Class<?> fieldType = field.getType();
+                                if (fieldType == String.class) {
+                                    field.set(pojoInstance, fieldValue);
+                                } else if (fieldType == int.class || fieldType == Integer.class) {
+                                    field.set(pojoInstance, Integer.parseInt(fieldValue));
+                                } else if (fieldType == long.class || fieldType == Long.class) {
+                                    field.set(pojoInstance, Long.parseLong(fieldValue));
+                                } else if (fieldType == double.class || fieldType == Double.class) {
+                                    field.set(pojoInstance, Double.parseDouble(fieldValue));
+                                } else if (fieldType == boolean.class || fieldType == Boolean.class) {
+                                    field.set(pojoInstance, Boolean.parseBoolean(fieldValue));
+                                } else {
+                                    field.set(pojoInstance, fieldValue);
+                                }
+                            } catch (NoSuchFieldException e) {
+                                // Ignorer les champs qui n'existent pas dans la classe
+                            }
+                        }
+                    }
+                    
+                    args[i] = pojoInstance;
                 }
-                
-                // Tous les paramètres sont String (validé au scan)
-                args[i] = paramValue;
             }
             
             // Invocation de la méthode avec les arguments extraits
@@ -171,19 +206,13 @@ public class FrontServlet extends HttpServlet {
             } else if (returnType.equals(ModelView.class)) {
                 // Si ModelView, faire un dispatcher et injecter les données si présentes
                 ModelView modelView = (ModelView) result;
-                List<HashMap<String, Object>> modelList = modelView.getModelList();
+                HashMap<String, Object> data = modelView.getData();
 
                 // Injecter chaque paire clé/valeur comme attribut de requête
-                if (modelList != null && !modelList.isEmpty()) {
-                    for (HashMap<String, Object> map : modelList) {
-                        if (map != null) {
-                            for (Map.Entry<String, Object> e : map.entrySet()) {
-                                req.setAttribute(e.getKey(), e.getValue());
-                            }
-                        }
+                if (data != null && !data.isEmpty()) {
+                    for (Map.Entry<String, Object> entry : data.entrySet()) {
+                        req.setAttribute(entry.getKey(), entry.getValue());
                     }
-                    // Mettre aussi la liste entière sous l'attribut 'model'
-                    req.setAttribute("model", modelList);
                 }
 
                 String viewPath = modelView.getView();
