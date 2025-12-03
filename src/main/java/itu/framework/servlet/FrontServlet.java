@@ -3,7 +3,7 @@ package itu.framework.servlet;
 import itu.framework.listener.FrameworkListener;
 import itu.framework.scan.ControllerScanner;
 import itu.framework.scan.ControllerScanner.MethodInfo;
-import itu.framework.scan.ModelView;
+import itu.framework.web.ModelView;
 import jakarta.servlet.RequestDispatcher;
 import jakarta.servlet.Servlet;
 import jakarta.servlet.ServletException;
@@ -14,9 +14,13 @@ import jakarta.servlet.http.HttpServletResponse;
 
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.lang.reflect.ParameterizedType;
+import java.time.LocalDate;
 import java.util.Map;
 import java.util.List;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -56,184 +60,435 @@ public class FrontServlet extends HttpServlet {
         String key = httpMethod + ":" + path;
         
         if (mappings == null) {
-            PrintWriter out = resp.getWriter();
-            out.print("<html><body>");
-            out.print("<p>ServletContext non initialisé (aucun mapping disponible)</p>");
-            out.print("</body></html>");
+            sendHtmlMessage(resp, "<p>ServletContext non initialisé (aucun mapping disponible)</p>");
             return;
         }
-  
-        // Recherche du mapping : exact -> ANY -> patterns avec variables {id}
-        ControllerScanner.MethodInfo methodInfo = mappings.get(key);
 
-        // Essayer la clé ANY exact
-        if (methodInfo == null) {
-            String anyKey = "ANY:" + path;
-            methodInfo = mappings.get(anyKey);
-        }
-
-        // Si toujours null, essayer de matcher les patterns enregistrés (ex: /employe/{id})
-        if (methodInfo == null) {
-            for (Map.Entry<String, ControllerScanner.MethodInfo> entry : mappings.entrySet()) {
-                String mapKey = entry.getKey();
-                // garder uniquement les mappings pour la même méthode ou ANY
-                if (!(mapKey.startsWith(httpMethod + ":") || mapKey.startsWith("ANY:"))) {
-                    continue;
-                }
-
-                ControllerScanner.MethodInfo mi = entry.getValue();
-                Pattern p = mi.getPathPattern();
-                if (p == null) continue;
-
-                Matcher matcher = p.matcher(path);
-                if (matcher.matches()) {
-                    methodInfo = mi;
-                    // extraire les variables de chemin et les mettre en attributs de requête
-                    List<String> names = mi.getPathParamNames();
-                    if (names != null) {
-                        for (int i = 0; i < names.size(); i++) {
-                            String paramName = names.get(i);
-                            String value = matcher.group(i + 1);
-                            req.setAttribute(paramName, value);
-                        }
-                    }
-                    break;
-                }
-            }
-        }
+        ControllerScanner.MethodInfo methodInfo = resolveMethodInfo(req, httpMethod, path, key, mappings);
 
         if (methodInfo == null) {
-            PrintWriter out = resp.getWriter();
-            out.print("<html><body>");
-            out.print("<p>Aucun mapping trouvé pour: " + key + "</p>");
-            out.print("</body></html>");
+            sendHtmlMessage(resp, "<p>Aucun mapping trouvé pour: " + key + "</p>");
             return;
         }
         
-        // Vérification du type de retour de la méthode
         try {
             Method method = methodInfo.getMethod();
             Class<?> returnType = method.getReturnType();
-            
-            // Instanciation du contrôleur
             Object controllerInstance = methodInfo.getControllerClass().getDeclaredConstructor().newInstance();
-            
-            // Préparation des arguments de la méthode depuis request.getParameter()
-            List<String> paramNames = methodInfo.getParameterNames();
-            List<Class<?>> paramTypes = methodInfo.getParameterTypes();
-            List<String> paramKeys = methodInfo.getParameterKeys();
-            Object[] args = new Object[paramNames.size()];
-            
-            for (int i = 0; i < paramNames.size(); i++) {
-                String paramName = paramNames.get(i);
-                Class<?> paramType = paramTypes.get(i);
-                String paramKey = (paramKeys != null && i < paramKeys.size()) ? paramKeys.get(i) : null;
-                
-                // Si c'est un Map, remplir avec tous les paramètres HTTP
-                if (paramType == Map.class || paramType == HashMap.class) {
-                    Map<String, Object> allParams = new HashMap<>();
-                    
-                    // Récupérer tous les paramètres de la requête
-                    java.util.Enumeration<String> parameterNames = req.getParameterNames();
-                    while (parameterNames.hasMoreElements()) {
-                        String paramKey2 = parameterNames.nextElement();
-                        String value = req.getParameter(paramKey2);
-                        allParams.put(paramKey2, value);
-                    }
-                    
-                    args[i] = allParams;
-                } else if (paramType == String.class) {
-                    // Si String, chercher par nom puis par @RequestParameter key
-                    String paramValue = req.getParameter(paramName);
-                    if (paramValue == null && paramKey != null) {
-                        paramValue = req.getParameter(paramKey);
-                    }
-                    args[i] = paramValue;
-                } else {
-                    // Sprint 8 bis: POJO parameter binding
-                    // Chercher les paramètres de la forme "paramName.field"
-                    Object pojoInstance = paramType.getDeclaredConstructor().newInstance();
-                    
-                    // Récupérer tous les paramètres HTTP
-                    java.util.Enumeration<String> parameterNames = req.getParameterNames();
-                    while (parameterNames.hasMoreElements()) {
-                        String httpParamName = parameterNames.nextElement();
-                        
-                        // Vérifier si le paramètre commence par "paramName."
-                        String prefix = paramName + ".";
-                        if (httpParamName.startsWith(prefix)) {
-                            String fieldName = httpParamName.substring(prefix.length());
-                            String fieldValue = req.getParameter(httpParamName);
-                            
-                            // Utiliser la réflexion pour définir la valeur du champ
-                            try {
-                                java.lang.reflect.Field field = paramType.getDeclaredField(fieldName);
-                                field.setAccessible(true);
-                                
-                                // Conversion de type selon le type du champ
-                                Class<?> fieldType = field.getType();
-                                if (fieldType == String.class) {
-                                    field.set(pojoInstance, fieldValue);
-                                } else if (fieldType == int.class || fieldType == Integer.class) {
-                                    field.set(pojoInstance, Integer.parseInt(fieldValue));
-                                } else if (fieldType == long.class || fieldType == Long.class) {
-                                    field.set(pojoInstance, Long.parseLong(fieldValue));
-                                } else if (fieldType == double.class || fieldType == Double.class) {
-                                    field.set(pojoInstance, Double.parseDouble(fieldValue));
-                                } else if (fieldType == boolean.class || fieldType == Boolean.class) {
-                                    field.set(pojoInstance, Boolean.parseBoolean(fieldValue));
-                                } else {
-                                    field.set(pojoInstance, fieldValue);
-                                }
-                            } catch (NoSuchFieldException e) {
-                                // Ignorer les champs qui n'existent pas dans la classe
-                            }
-                        }
-                    }
-                    
-                    args[i] = pojoInstance;
-                }
-            }
-            
-            // Invocation de la méthode avec les arguments extraits
+            Object[] args = buildMethodArguments(req, httpMethod, methodInfo);
             Object result = method.invoke(controllerInstance, args);
-            
-            // Gestion selon le type de retour
-            if (returnType.equals(String.class)) {
-                // Si String, afficher avec out.print
-                PrintWriter out = resp.getWriter();
-                out.print((String) result);
-            } else if (returnType.equals(ModelView.class)) {
-                // Si ModelView, faire un dispatcher et injecter les données si présentes
-                ModelView modelView = (ModelView) result;
-                HashMap<String, Object> data = modelView.getData();
-
-                // Injecter chaque paire clé/valeur comme attribut de requête
-                if (data != null && !data.isEmpty()) {
-                    for (Map.Entry<String, Object> entry : data.entrySet()) {
-                        req.setAttribute(entry.getKey(), entry.getValue());
-                    }
-                }
-
-                String viewPath = modelView.getView();
-                if (!viewPath.startsWith("/")) {
-                    viewPath = "/" + viewPath;
-                }
-                RequestDispatcher dispatcher = req.getRequestDispatcher(viewPath);
-                dispatcher.forward(req, resp);
-            } else {
-                // Si autre type, afficher message non supporté
-                PrintWriter out = resp.getWriter();
-                out.print("Type de retour non supporté: " + returnType.getName());
-            }
-            
+            processResult(resp, returnType, result, req);
         } catch (Exception e) {
+            renderExecutionError(resp, e);
+        }
+    }
+
+    private ControllerScanner.MethodInfo resolveMethodInfo(HttpServletRequest req,
+                                                           String httpMethod,
+                                                           String path,
+                                                           String lookupKey,
+                                                           Map<String, ControllerScanner.MethodInfo> mappings) {
+        ControllerScanner.MethodInfo methodInfo = mappings.get(lookupKey);
+        if (methodInfo != null) {
+            return methodInfo;
+        }
+
+        String anyKey = "ANY:" + path;
+        methodInfo = mappings.get(anyKey);
+        if (methodInfo != null) {
+            return methodInfo;
+        }
+
+        return findPatternMatch(req, httpMethod, path, mappings);
+    }
+
+    private ControllerScanner.MethodInfo findPatternMatch(HttpServletRequest req,
+                                                         String httpMethod,
+                                                         String path,
+                                                         Map<String, ControllerScanner.MethodInfo> mappings) {
+        for (Map.Entry<String, ControllerScanner.MethodInfo> entry : mappings.entrySet()) {
+            String mapKey = entry.getKey();
+            if (!(mapKey.startsWith(httpMethod + ":") || mapKey.startsWith("ANY:"))) {
+                continue;
+            }
+
+            ControllerScanner.MethodInfo mi = entry.getValue();
+            Pattern p = mi.getPathPattern();
+            if (p == null) {
+                continue;
+            }
+
+            Matcher matcher = p.matcher(path);
+            if (!matcher.matches()) {
+                continue;
+            }
+
+            attachPathVariables(req, mi, matcher);
+            return mi;
+        }
+        return null;
+    }
+
+    private void attachPathVariables(HttpServletRequest req,
+                                     ControllerScanner.MethodInfo methodInfo,
+                                     Matcher matcher) {
+        List<String> names = methodInfo.getPathParamNames();
+        if (names == null || names.isEmpty()) {
+            return;
+        }
+
+        for (int i = 0; i < names.size(); i++) {
+            req.setAttribute(names.get(i), matcher.group(i + 1));
+        }
+    }
+
+    private Object[] buildMethodArguments(HttpServletRequest req,
+                                          String httpMethod,
+                                          ControllerScanner.MethodInfo methodInfo) throws ReflectiveOperationException {
+        List<String> paramNames = methodInfo.getParameterNames();
+        List<Class<?>> paramTypes = methodInfo.getParameterTypes();
+        List<String> paramKeys = methodInfo.getParameterKeys();
+        Object[] args = new Object[paramNames.size()];
+
+        for (int i = 0; i < paramNames.size(); i++) {
+            String paramName = paramNames.get(i);
+            Class<?> paramType = paramTypes.get(i);
+            String paramKey = (paramKeys != null && i < paramKeys.size()) ? paramKeys.get(i) : null;
+
+            if (paramType == Map.class || paramType == HashMap.class) {
+                args[i] = createParamMap(req, httpMethod);
+            } else if (paramType == String.class) {
+                args[i] = resolveStringParameter(req, paramName, paramKey);
+            } else {
+                args[i] = bindPojoParameter(req, paramName, paramType);
+            }
+        }
+
+        return args;
+    }
+
+    private Map<String, Object> createParamMap(HttpServletRequest req, String httpMethod) {
+        Map<String, Object> allParams = new HashMap<>();
+        if (!"POST".equals(httpMethod)) {
+            return allParams;
+        }
+        java.util.Enumeration<String> parameterNames = req.getParameterNames();
+        while (parameterNames.hasMoreElements()) {
+            String key = parameterNames.nextElement();
+            allParams.put(key, req.getParameter(key));
+        }
+        return allParams;
+    }
+
+    private String resolveStringParameter(HttpServletRequest req, String paramName, String paramKey) {
+        Object attrValue = req.getAttribute(paramName);
+        if (attrValue != null) {
+            return attrValue.toString();
+        }
+
+        String paramValue = req.getParameter(paramName);
+        if (paramValue != null) {
+            return paramValue;
+        }
+
+        if (paramKey != null) {
+            return req.getParameter(paramKey);
+        }
+
+        return null;
+    }
+
+    private Object bindPojoParameter(HttpServletRequest req, String paramName, Class<?> paramType) throws ReflectiveOperationException {
+        Object pojoInstance = paramType.getDeclaredConstructor().newInstance();
+        Map<String, Integer> arrayAutoIndices = new HashMap<>();
+        Map<String, Integer> arrayCurrentIndices = new HashMap<>();
+        Map<String, Integer> nestedPathUsage = new HashMap<>();
+        java.util.Enumeration<String> parameterNames = req.getParameterNames();
+
+        while (parameterNames.hasMoreElements()) {
+            String httpParamName = parameterNames.nextElement();
+            String prefix = paramName + ".";
+            if (!httpParamName.startsWith(prefix)) {
+                continue;
+            }
+
+            String nestedPath = httpParamName.substring(prefix.length());
+
+            if (isArrayEntryMarker(nestedPath)) {
+                ensureArrayEntry(pojoInstance, nestedPath, arrayAutoIndices, arrayCurrentIndices);
+                continue;
+            }
+
+            String[] values = req.getParameterValues(httpParamName);
+            if (values == null || values.length == 0) {
+                values = new String[] { req.getParameter(httpParamName) };
+            }
+
+            for (String value : values) {
+                if (value == null) {
+                    continue;
+                }
+                int usage = nestedPathUsage.getOrDefault(nestedPath, 0);
+                boolean forceNewListEntry = usage > 0;
+                assignNestedField(pojoInstance, nestedPath, value, arrayAutoIndices, arrayCurrentIndices, false, forceNewListEntry);
+                nestedPathUsage.put(nestedPath, usage + 1);
+            }
+        }
+
+        return pojoInstance;
+    }
+
+    private void processResult(HttpServletResponse resp,
+                               Class<?> returnType,
+                               Object result,
+                               HttpServletRequest req) throws ServletException, IOException {
+        if (returnType.equals(String.class)) {
             PrintWriter out = resp.getWriter();
-            out.print("<html><body>");
-            out.print("<h3>Erreur lors de l'exécution de la méthode:</h3>");
-            out.print("<pre>" + e.getMessage() + "</pre>");
-            out.print("</body></html>");
-            e.printStackTrace();
+            out.print((String) result);
+            return;
+        }
+
+        if (returnType.equals(ModelView.class)) {
+            ModelView modelView = (ModelView) result;
+            HashMap<String, Object> data = modelView.getData();
+
+            if (data != null && !data.isEmpty()) {
+                for (Map.Entry<String, Object> entry : data.entrySet()) {
+                    req.setAttribute(entry.getKey(), entry.getValue());
+                }
+            }
+
+            String viewPath = modelView.getView();
+            if (!viewPath.startsWith("/")) {
+                viewPath = "/" + viewPath;
+            }
+            RequestDispatcher dispatcher = req.getRequestDispatcher(viewPath);
+            dispatcher.forward(req, resp);
+            return;
+        }
+
+        PrintWriter out = resp.getWriter();
+        out.print("Type de retour non supporté: " + returnType.getName());
+    }
+
+    private void sendHtmlMessage(HttpServletResponse resp, String message) throws IOException {
+        PrintWriter out = resp.getWriter();
+        out.print("<html><body>");
+        out.print(message);
+        out.print("</body></html>");
+    }
+
+    private void renderExecutionError(HttpServletResponse resp, Exception e) throws IOException {
+        PrintWriter out = resp.getWriter();
+        out.print("<html><body>");
+        out.print("<h3>Erreur lors de l'exécution de la méthode:</h3>");
+        out.print("<pre>" + e.getMessage() + "</pre>");
+        out.print("</body></html>");
+        e.printStackTrace();
+    }
+
+    private static final Pattern ARRAY_SEGMENT_PATTERN = Pattern.compile("^(.+?)\\[(\\d*)\\]$");
+
+    private void assignNestedField(Object root,
+                                   String fieldPath,
+                                   String value,
+                                   Map<String, Integer> arrayAutoIndices,
+                                   Map<String, Integer> arrayCurrentIndices,
+                                   boolean allowCreateOnly,
+                                   boolean forceNewListEntry) throws ReflectiveOperationException {
+        if (value == null && !allowCreateOnly) {
+            return;
+        }
+
+        String[] parts = fieldPath.split("\\.");
+        Object current = root;
+        StringBuilder pathBuilder = new StringBuilder();
+
+        for (int idx = 0; idx < parts.length; idx++) {
+            Segment segment = parseSegment(parts[idx]);
+            String fieldName = segment.name;
+            String arrayKey = pathBuilder.length() == 0 ? fieldName : pathBuilder + "." + fieldName;
+
+            Field field = findField(current.getClass(), fieldName);
+            if (field == null) {
+                throw new NoSuchFieldException(fieldName);
+            }
+            field.setAccessible(true);
+
+            boolean isLastSegment = idx == parts.length - 1;
+
+            if (segment.isArray) {
+                List<Object> list = getOrCreateList(field, current);
+                int targetIndex = resolveArrayIndex(arrayKey, segment, forceNewListEntry, arrayAutoIndices, arrayCurrentIndices);
+                Object element = ensureListElement(list, targetIndex, field);
+                current = element;
+
+                if (isLastSegment) {
+                    return;
+                }
+            } else {
+                if (isLastSegment) {
+                    if (value == null) {
+                        return;
+                    }
+                    setFieldValue(field, current, value);
+                    return;
+                }
+                Object nextValue = field.get(current);
+                if (nextValue == null) {
+                    nextValue = field.getType().getDeclaredConstructor().newInstance();
+                    field.set(current, nextValue);
+                }
+                current = nextValue;
+            }
+
+            if (pathBuilder.length() == 0) {
+                pathBuilder.append(fieldName);
+            } else {
+                pathBuilder.append('.').append(fieldName);
+            }
+        }
+    }
+
+    private boolean isArrayEntryMarker(String nestedPath) {
+        return nestedPath.endsWith("[]") && !nestedPath.contains(".");
+    }
+
+    private void ensureArrayEntry(Object root,
+                                  String nestedPath,
+                                  Map<String, Integer> arrayAutoIndices,
+                                  Map<String, Integer> arrayCurrentIndices) throws ReflectiveOperationException {
+        assignNestedField(root, nestedPath, null, arrayAutoIndices, arrayCurrentIndices, true, true);
+    }
+
+    private int resolveArrayIndex(String arrayKey,
+                                  Segment segment,
+                                  boolean forceNewEntry,
+                                  Map<String, Integer> autoIndices,
+                                  Map<String, Integer> currentIndices) {
+        if (segment.hasExplicitIndex()) {
+            currentIndices.put(arrayKey, segment.explicitIndex);
+            return segment.explicitIndex;
+        }
+
+        Integer current = currentIndices.get(arrayKey);
+        if (current == null || forceNewEntry) {
+            int next = autoIndices.getOrDefault(arrayKey, 0);
+            autoIndices.put(arrayKey, next + 1);
+            current = next;
+            currentIndices.put(arrayKey, current);
+        }
+        return current;
+    }
+
+    private List<Object> getOrCreateList(Field field, Object target) throws IllegalAccessException {
+        Object existing = field.get(target);
+        if (existing == null) {
+            List<Object> list = new ArrayList<>();
+            field.set(target, list);
+            return list;
+        }
+        if (existing instanceof List<?>) {
+            @SuppressWarnings("unchecked")
+            List<Object> list = (List<Object>) existing;
+            return list;
+        }
+        throw new IllegalArgumentException("Champ " + field.getName() + " n'est pas une List");
+    }
+
+    private Object ensureListElement(List<Object> list, int index, Field field) throws ReflectiveOperationException {
+        while (list.size() <= index) {
+            list.add(null);
+        }
+        Object element = list.get(index);
+        if (element == null) {
+            Class<?> elementClass = getListElementType(field);
+            if (elementClass == null) {
+                throw new IllegalArgumentException("Impossible de déterminer le type des éléments pour " + field.getName());
+            }
+            element = elementClass.getDeclaredConstructor().newInstance();
+            list.set(index, element);
+        }
+        return element;
+    }
+
+    private Class<?> getListElementType(Field field) {
+        java.lang.reflect.Type genericType = field.getGenericType();
+        if (genericType instanceof ParameterizedType) {
+            ParameterizedType pt = (ParameterizedType) genericType;
+            java.lang.reflect.Type[] args = pt.getActualTypeArguments();
+            if (args.length == 1 && args[0] instanceof Class<?>) {
+                return (Class<?>) args[0];
+            }
+        }
+        return null;
+    }
+
+    private Segment parseSegment(String raw) {
+        Matcher matcher = ARRAY_SEGMENT_PATTERN.matcher(raw);
+        if (matcher.matches()) {
+            String name = matcher.group(1);
+            String indexPart = matcher.group(2);
+            if (indexPart != null && !indexPart.isEmpty()) {
+                return new Segment(name, true, Integer.parseInt(indexPart));
+            }
+            return new Segment(name, true, null);
+        }
+        return new Segment(raw, false, null);
+    }
+
+    private Field findField(Class<?> targetClass, String name) {
+        Class<?> current = targetClass;
+        while (current != null) {
+            try {
+                return current.getDeclaredField(name);
+            } catch (NoSuchFieldException e) {
+                current = current.getSuperclass();
+            }
+        }
+        return null;
+    }
+
+    private void setFieldValue(Field field, Object target, String value) throws IllegalAccessException {
+        if (value == null) {
+            return;
+        }
+        Class<?> fieldType = field.getType();
+        if (fieldType == String.class) {
+            field.set(target, value);
+            return;
+        }
+        if (value.isEmpty()) {
+            return;
+        }
+        if (fieldType == int.class || fieldType == Integer.class) {
+            field.set(target, Integer.parseInt(value));
+        } else if (fieldType == long.class || fieldType == Long.class) {
+            field.set(target, Long.parseLong(value));
+        } else if (fieldType == double.class || fieldType == Double.class) {
+            field.set(target, Double.parseDouble(value));
+        } else if (fieldType == boolean.class || fieldType == Boolean.class) {
+            field.set(target, Boolean.parseBoolean(value));
+        } else if (fieldType == LocalDate.class) {
+            field.set(target, LocalDate.parse(value));
+        } else {
+            field.set(target, value);
+        }
+    }
+
+    private static final class Segment {
+        final String name;
+        final boolean isArray;
+        final Integer explicitIndex;
+
+        private Segment(String name, boolean isArray, Integer explicitIndex) {
+            this.name = name;
+            this.isArray = isArray;
+            this.explicitIndex = explicitIndex;
+        }
+
+        boolean hasExplicitIndex() {
+            return explicitIndex != null;
         }
     }
 }

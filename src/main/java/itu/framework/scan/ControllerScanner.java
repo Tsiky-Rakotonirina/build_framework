@@ -173,8 +173,8 @@ public class ControllerScanner {
                 methodInfo.setUrlPattern(url);
 
                 // Détecter des variables de chemin {name} et construire un Pattern
+                List<String> pathParams = new ArrayList<>();
                 if (url.contains("{")) {
-                    List<String> pathParams = new ArrayList<>();
                     Matcher m = Pattern.compile("\\{([^/}]+)\\}").matcher(url);
                     while (m.find()) {
                         pathParams.add(m.group(1));
@@ -234,6 +234,26 @@ public class ControllerScanner {
                         paramKeys.add(null);
                     }
                 }
+
+                if (!pathParams.isEmpty()) {
+                    for (String pathParam : pathParams) {
+                        int idx = paramNames.indexOf(pathParam);
+                        if (idx == -1) {
+                            throw new IllegalArgumentException(
+                                "[ControllerScanner] ERREUR: L'URL '" + url + "' demande la variable de chemin '{" +
+                                pathParam + "}' mais aucun paramètre de méthode nommé '" + pathParam + "' n'a été trouvé."
+                            );
+                        }
+
+                        Class<?> candidateType = paramTypes.get(idx);
+                        if (candidateType != String.class) {
+                            throw new IllegalArgumentException(
+                                "[ControllerScanner] ERREUR: Le paramètre '" + pathParam + "' lié à '{" + pathParam +
+                                "}' doit être de type String."
+                            );
+                        }
+                    }
+                }
                 
                 methodInfo.setParameterNames(paramNames);
                 methodInfo.setParameterTypes(paramTypes);
@@ -255,10 +275,7 @@ public class ControllerScanner {
                     }
                     
                     mappings.put(key, methodInfo);
-                    
-                    String paramInfo = paramNames.isEmpty() ? "()" : "(" + String.join(", ", paramNames) + ")";
-                    System.out.println("[ControllerScanner] Mapping ajouté: " + key + 
-                                     " -> " + controllerClass.getSimpleName() + "." + method.getName() + paramInfo);
+
                 }
             }
         }
