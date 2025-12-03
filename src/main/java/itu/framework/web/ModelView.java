@@ -1,4 +1,4 @@
-package itu.framework.scan;
+package itu.framework.web;
 
 import java.util.HashMap;
 
@@ -28,17 +28,14 @@ public class ModelView {
         }
     }
 
-    /** Retourne le HashMap contenant les données */
     public HashMap<String, Object> getData() {
         return data;
     }
 
-    /** Ajoute une donnée au model */
     public void addData(String key, Object value) {
         data.put(key, value);
     }
 
-    /** Récupère une valeur du model */
     public Object getData(String key) {
         return data.get(key);
     }
