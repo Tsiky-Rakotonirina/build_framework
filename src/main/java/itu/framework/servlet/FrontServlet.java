@@ -4,8 +4,9 @@ import itu.framework.listener.FrameworkListener;
 import itu.framework.scan.ControllerScanner;
 import itu.framework.scan.ControllerScanner.MethodInfo;
 import itu.framework.web.ModelView;
+import itu.framework.web.JsonResponse;
+import com.google.gson.Gson;
 import jakarta.servlet.RequestDispatcher;
-import jakarta.servlet.Servlet;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.HttpServlet;
@@ -27,6 +28,8 @@ import java.util.regex.Pattern;
 
 @WebServlet(name = "FrontServlet", urlPatterns = {"/"}, loadOnStartup = 1)
 public class FrontServlet extends HttpServlet {
+
+    private static final Gson gson = new Gson();
 
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
@@ -77,7 +80,7 @@ public class FrontServlet extends HttpServlet {
             Object controllerInstance = methodInfo.getControllerClass().getDeclaredConstructor().newInstance();
             Object[] args = buildMethodArguments(req, httpMethod, methodInfo);
             Object result = method.invoke(controllerInstance, args);
-            processResult(resp, returnType, result, req);
+            processResult(resp, returnType, result, req, methodInfo);
         } catch (Exception e) {
             renderExecutionError(resp, e);
         }
@@ -241,7 +244,14 @@ public class FrontServlet extends HttpServlet {
     private void processResult(HttpServletResponse resp,
                                Class<?> returnType,
                                Object result,
-                               HttpServletRequest req) throws ServletException, IOException {
+                               HttpServletRequest req,
+                               MethodInfo methodInfo) throws ServletException, IOException {
+        // Vérifier si la méthode est annotée avec @Json
+        if (methodInfo.isJsonMethod()) {
+            handleJsonResponse(resp, returnType, result);
+            return;
+        }
+
         if (returnType.equals(String.class)) {
             PrintWriter out = resp.getWriter();
             out.print((String) result);
@@ -491,4 +501,38 @@ public class FrontServlet extends HttpServlet {
             return explicitIndex != null;
         }
     }
+
+    /**
+     * Gère les réponses JSON pour les méthodes annotées avec @Json
+     * Si la méthode retourne une JsonResponse, on la sérialise directement
+     * Si elle retourne un ModelView, on extrait les données et les met dans la réponse
+     * Sinon, on enveloppe l'objet dans une réponse JSON de succès
+     */
+    private void handleJsonResponse(HttpServletResponse resp, Class<?> returnType, Object result) throws IOException {
+        resp.setContentType("application/json; charset=UTF-8");
+        PrintWriter out = resp.getWriter();
+        
+        JsonResponse jsonResponse;
+        
+        // Si le résultat est déjà une JsonResponse
+        if (result instanceof JsonResponse) {
+            jsonResponse = (JsonResponse) result;
+        }
+        // Si le résultat est un ModelView, extraire les données
+        else if (returnType.equals(ModelView.class)) {
+            ModelView modelView = (ModelView) result;
+            HashMap<String, Object> data = modelView.getData();
+            jsonResponse = JsonResponse.success(200, "Résultat retourné", data.isEmpty() ? null : data);
+        }
+        // Sinon, envelopper l'objet dans une réponse de succès
+        else {
+            jsonResponse = JsonResponse.success(200, "Résultat retourné", result);
+        }
+        
+        // Sérialiser la réponse en JSON et l'envoyer
+        String jsonString = gson.toJson(jsonResponse);
+        out.print(jsonString);
+        out.flush();
+    }
 }
+

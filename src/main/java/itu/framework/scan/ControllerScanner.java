@@ -2,6 +2,7 @@ package itu.framework.scan;
 
 import itu.framework.annotation.Controller;
 import itu.framework.annotation.HttpMethod;
+import itu.framework.annotation.Json;
 import itu.framework.annotation.RequestParameter;
 import itu.framework.annotation.Url;
 
@@ -37,6 +38,8 @@ public class ControllerScanner {
         private List<String> pathParamNames;
         // L'URL telle qu'annotée (ex: /employe/{id})
         private String urlPattern;
+        // Indique si la méthode est annotée avec @Json
+        private boolean isJsonMethod;
         
         public MethodInfo(Class<?> controllerClass, Method method) {
             this.controllerClass = controllerClass;
@@ -45,6 +48,7 @@ public class ControllerScanner {
             this.parameterTypes = new ArrayList<>();
             this.parameterKeys = new ArrayList<>();
             this.pathParamNames = new ArrayList<>();
+            this.isJsonMethod = false;
         }
         
         public Class<?> getControllerClass() {
@@ -98,6 +102,10 @@ public class ControllerScanner {
         public String getUrlPattern() { return urlPattern; }
 
         public void setUrlPattern(String urlPattern) { this.urlPattern = urlPattern; }
+
+        public boolean isJsonMethod() { return isJsonMethod; }
+
+        public void setJsonMethod(boolean jsonMethod) { isJsonMethod = jsonMethod; }
     }
     
     /**
@@ -168,9 +176,14 @@ public class ControllerScanner {
                     httpMethods = new String[] { "GET", "POST" };
                 }
                 
-                // Créer le MethodInfo une seule fois
+                // Créer le MethodInfo une seule volta
                 MethodInfo methodInfo = new MethodInfo(controllerClass, method);
                 methodInfo.setUrlPattern(url);
+
+                // Vérifier si la méthode est annotée avec @Json
+                if (method.isAnnotationPresent(Json.class)) {
+                    methodInfo.setJsonMethod(true);
+                }
 
                 // Détecter des variables de chemin {name} et construire un Pattern
                 List<String> pathParams = new ArrayList<>();
