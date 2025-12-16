@@ -14,6 +14,7 @@ import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.Part;
 
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -151,11 +152,14 @@ public class FrontServlet extends HttpServlet {
 
     private Object[] buildMethodArguments(HttpServletRequest req,
                                           String httpMethod,
-                                          ControllerScanner.MethodInfo methodInfo) throws ReflectiveOperationException {
+                                          ControllerScanner.MethodInfo methodInfo) throws ReflectiveOperationException, ServletException, IOException {
         List<String> paramNames = methodInfo.getParameterNames();
         List<Class<?>> paramTypes = methodInfo.getParameterTypes();
         List<String> paramKeys = methodInfo.getParameterKeys();
         Object[] args = new Object[paramNames.size()];
+        
+        // Extraire les fichiers uploadés
+        Map<String, byte[]> uploadedFiles = extractUploadedFiles(req);
 
         for (int i = 0; i < paramNames.size(); i++) {
             String paramName = paramNames.get(i);
@@ -163,18 +167,52 @@ public class FrontServlet extends HttpServlet {
             String paramKey = (paramKeys != null && i < paramKeys.size()) ? paramKeys.get(i) : null;
 
             if (paramType == Map.class || paramType == HashMap.class) {
-                args[i] = createParamMap(req, httpMethod);
+                args[i] = createParamMap(req, httpMethod, uploadedFiles);
             } else if (paramType == String.class) {
                 args[i] = resolveStringParameter(req, paramName, paramKey);
+            } else if (paramType == byte[].class) {
+                // Chercher le fichier uploadé par le nom du paramètre ou @RequestParameter
+                String fileKey = (paramKey != null) ? paramKey : paramName;
+                args[i] = uploadedFiles.getOrDefault(fileKey, null);
             } else {
-                args[i] = bindPojoParameter(req, paramName, paramType);
+                args[i] = bindPojoParameter(req, paramName, paramType, uploadedFiles);
             }
         }
 
         return args;
     }
+    
+    private Map<String, byte[]> extractUploadedFiles(HttpServletRequest req) throws ServletException, IOException {
+        Map<String, byte[]> files = new HashMap<>();
+        
+        try {
+            for (Part part : req.getParts()) {
+                String partName = part.getName();
+                if (part.getSize() > 0) {
+                    byte[] fileContent = readPartContent(part);
+                    files.put(partName, fileContent);
+                }
+            }
+        } catch (Exception e) {
+            // getParts() échoue si ce n'est pas multipart/form-data, on ignore
+        }
+        
+        return files;
+    }
+    
+    private byte[] readPartContent(Part part) throws IOException {
+        java.io.BufferedInputStream bis = new java.io.BufferedInputStream(part.getInputStream());
+        java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+        byte[] buffer = new byte[1024];
+        int length;
+        while ((length = bis.read(buffer)) != -1) {
+            baos.write(buffer, 0, length);
+        }
+        bis.close();
+        return baos.toByteArray();
+    }
 
-    private Map<String, Object> createParamMap(HttpServletRequest req, String httpMethod) {
+    private Map<String, Object> createParamMap(HttpServletRequest req, String httpMethod, Map<String, byte[]> uploadedFiles) {
         Map<String, Object> allParams = new HashMap<>();
         if (!"POST".equals(httpMethod)) {
             return allParams;
@@ -184,6 +222,10 @@ public class FrontServlet extends HttpServlet {
             String key = parameterNames.nextElement();
             allParams.put(key, req.getParameter(key));
         }
+        
+        // Ajouter les fichiers uploadés à la Map
+        allParams.putAll(uploadedFiles);
+        
         return allParams;
     }
 
@@ -205,13 +247,14 @@ public class FrontServlet extends HttpServlet {
         return null;
     }
 
-    private Object bindPojoParameter(HttpServletRequest req, String paramName, Class<?> paramType) throws ReflectiveOperationException {
+    private Object bindPojoParameter(HttpServletRequest req, String paramName, Class<?> paramType, Map<String, byte[]> uploadedFiles) throws ReflectiveOperationException {
         Object pojoInstance = paramType.getDeclaredConstructor().newInstance();
         Map<String, Integer> arrayAutoIndices = new HashMap<>();
         Map<String, Integer> arrayCurrentIndices = new HashMap<>();
         Map<String, Integer> nestedPathUsage = new HashMap<>();
         java.util.Enumeration<String> parameterNames = req.getParameterNames();
 
+        // Traiter d'abord les paramètres HTTP
         while (parameterNames.hasMoreElements()) {
             String httpParamName = parameterNames.nextElement();
             String prefix = paramName + ".";
@@ -239,6 +282,17 @@ public class FrontServlet extends HttpServlet {
                 boolean forceNewListEntry = usage > 0;
                 assignNestedField(pojoInstance, nestedPath, value, arrayAutoIndices, arrayCurrentIndices, false, forceNewListEntry);
                 nestedPathUsage.put(nestedPath, usage + 1);
+            }
+        }
+        
+        // Traiter ensuite les fichiers uploadés pour les champs byte[]
+        for (Field field : paramType.getDeclaredFields()) {
+            if (field.getType() == byte[].class) {
+                String fieldName = field.getName();
+                if (uploadedFiles.containsKey(fieldName)) {
+                    field.setAccessible(true);
+                    field.set(pojoInstance, uploadedFiles.get(fieldName));
+                }
             }
         }
 

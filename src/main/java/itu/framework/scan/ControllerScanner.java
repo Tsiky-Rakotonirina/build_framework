@@ -212,9 +212,11 @@ public class ControllerScanner {
                 for (Parameter param : parameters) {
                     Class<?> paramType = param.getType();
                     
-                    // VALIDATION: String, Map<String, Object> OU classes POJO personnalisées
+                    // VALIDATION: String, byte[], Map<String, Object> OU classes POJO personnalisées
                     if (paramType == String.class) {
                         // OK - String accepté
+                    } else if (paramType == byte[].class) {
+                        // OK - byte[] accepté pour les uploads de fichiers
                     } else if (paramType == Map.class || paramType == HashMap.class) {
                         // Vérifier qu'il n'y a qu'un seul Map
                         if (hasMapParam) {
@@ -224,13 +226,13 @@ public class ControllerScanner {
                             );
                         }
                         hasMapParam = true;
-                    } else if (paramType.isPrimitive() || paramType.isArray() || paramType.isInterface()) {
-                        // Interdire les types primitifs, tableaux, interfaces
+                    } else if (paramType.isPrimitive() || paramType.isInterface()) {
+                        // Interdire les types primitifs, interfaces
                         throw new IllegalArgumentException(
                             "[ControllerScanner] ERREUR: La méthode " + controllerClass.getSimpleName() + 
                             "." + method.getName() + "() a un paramètre '" + param.getName() + 
                             "' de type " + paramType.getSimpleName() + 
-                            ". Les paramètres doivent être String, Map ou des classes POJO."
+                            ". Les paramètres doivent être String, byte[], Map ou des classes POJO."
                         );
                     } else {
                         // OK - Classe POJO personnalisée (sprint 8 bis)
