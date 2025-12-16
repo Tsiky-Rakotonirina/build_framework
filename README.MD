@@ -22,3 +22,6 @@
         si erreur : error : ""
         }
     si type ModelView mettre dans data le data aadans modelView sinon mettre dans data l objet retourne par la methode annotee
+- sprint 10 : upload de fichier -> getParts a verifier si ya fichier attache dans req -> prendre nom et convertir en bytes -> adapter les args de fonction annote en Map
+
+est il possible de rendre les controllers en singleton
