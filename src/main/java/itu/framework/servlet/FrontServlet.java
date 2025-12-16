@@ -10,6 +10,7 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import jakarta.servlet.RequestDispatcher;
 import jakarta.servlet.ServletException;
+import jakarta.servlet.annotation.MultipartConfig;
 import jakarta.servlet.annotation.WebServlet;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
@@ -29,6 +30,11 @@ import java.util.HashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+@MultipartConfig(
+    maxFileSize = 16777216,      // 16MB
+    maxRequestSize = 33554432,  // 32MB
+    fileSizeThreshold = 1048576 // 1MB
+)
 @WebServlet(name = "FrontServlet", urlPatterns = {"/"}, loadOnStartup = 1)
 public class FrontServlet extends HttpServlet {
 
@@ -158,8 +164,18 @@ public class FrontServlet extends HttpServlet {
         List<String> paramKeys = methodInfo.getParameterKeys();
         Object[] args = new Object[paramNames.size()];
         
-        // Extraire les fichiers uploadés
-        Map<String, byte[]> uploadedFiles = extractUploadedFiles(req);
+        // Extraire les fichiers uploadés uniquement si nécessaire (présence de byte[] ou Map)
+        Map<String, byte[]> uploadedFiles = new HashMap<>();
+        boolean needsFiles = false;
+        for (Class<?> type : paramTypes) {
+            if (type == byte[].class || type == Map.class || type == HashMap.class) {
+                needsFiles = true;
+                break;
+            }
+        }
+        if (needsFiles) {
+            uploadedFiles = extractUploadedFiles(req);
+        }
 
         for (int i = 0; i < paramNames.size(); i++) {
             String paramName = paramNames.get(i);
