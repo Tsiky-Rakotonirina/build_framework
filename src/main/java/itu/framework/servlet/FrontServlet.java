@@ -89,8 +89,29 @@ public class FrontServlet extends HttpServlet {
             Method method = methodInfo.getMethod();
             Class<?> returnType = method.getReturnType();
             Object controllerInstance = methodInfo.getControllerClass().getDeclaredConstructor().newInstance();
-            Object[] args = buildMethodArguments(req, httpMethod, methodInfo);
+            
+            // Créer une Map pour @Session si nécessaire
+            Map<String, Object> sessionMap = null;
+            int sessionParamIndex = methodInfo.getSessionParameterIndex();
+            if (sessionParamIndex >= 0) {
+                sessionMap = new HashMap<>();
+                // Charger toutes les données de HttpSession dans la Map
+                jakarta.servlet.http.HttpSession httpSession = req.getSession();
+                java.util.Enumeration<String> attributeNames = httpSession.getAttributeNames();
+                while (attributeNames.hasMoreElements()) {
+                    String attrName = attributeNames.nextElement();
+                    sessionMap.put(attrName, httpSession.getAttribute(attrName));
+                }
+            }
+            
+            Object[] args = buildMethodArguments(req, httpMethod, methodInfo, sessionMap);
             Object result = method.invoke(controllerInstance, args);
+            
+            // Synchroniser la Map @Session avec HttpSession après l'exécution
+            if (sessionParamIndex >= 0 && sessionMap != null) {
+                synchronizeSessionMap(req, sessionMap);
+            }
+            
             processResult(resp, returnType, result, req, methodInfo);
         } catch (Exception e) {
             renderExecutionError(resp, e);
@@ -158,7 +179,8 @@ public class FrontServlet extends HttpServlet {
 
     private Object[] buildMethodArguments(HttpServletRequest req,
                                           String httpMethod,
-                                          ControllerScanner.MethodInfo methodInfo) throws ReflectiveOperationException, ServletException, IOException {
+                                          ControllerScanner.MethodInfo methodInfo,
+                                          Map<String, Object> sessionMap) throws ReflectiveOperationException, ServletException, IOException {
         List<String> paramNames = methodInfo.getParameterNames();
         List<Class<?>> paramTypes = methodInfo.getParameterTypes();
         List<String> paramKeys = methodInfo.getParameterKeys();
@@ -182,7 +204,10 @@ public class FrontServlet extends HttpServlet {
             Class<?> paramType = paramTypes.get(i);
             String paramKey = (paramKeys != null && i < paramKeys.size()) ? paramKeys.get(i) : null;
 
-            if (paramType == Map.class || paramType == HashMap.class) {
+            // Vérifier si c'est le paramètre @Session
+            if (i == methodInfo.getSessionParameterIndex()) {
+                args[i] = sessionMap;
+            } else if (paramType == Map.class || paramType == HashMap.class) {
                 args[i] = createParamMap(req, httpMethod, uploadedFiles);
             } else if (paramType == String.class) {
                 args[i] = resolveStringParameter(req, paramName, paramKey);
@@ -573,6 +598,32 @@ public class FrontServlet extends HttpServlet {
 
         boolean hasExplicitIndex() {
             return explicitIndex != null;
+        }
+    }
+
+    /**
+     * Synchronise la Map @Session avec HttpSession
+     * Toutes les modifications dans la Map sont répercutées dans HttpSession
+     */
+    private void synchronizeSessionMap(HttpServletRequest req, Map<String, Object> sessionMap) {
+        jakarta.servlet.http.HttpSession httpSession = req.getSession();
+        
+        // D'abord, supprimer les attributs qui ont été retirés de la Map
+        java.util.Enumeration<String> attributeNames = httpSession.getAttributeNames();
+        java.util.List<String> toRemove = new java.util.ArrayList<>();
+        while (attributeNames.hasMoreElements()) {
+            String attrName = attributeNames.nextElement();
+            if (!sessionMap.containsKey(attrName)) {
+                toRemove.add(attrName);
+            }
+        }
+        for (String attrName : toRemove) {
+            httpSession.removeAttribute(attrName);
+        }
+        
+        // Ensuite, mettre à jour ou ajouter les attributs de la Map
+        for (Map.Entry<String, Object> entry : sessionMap.entrySet()) {
+            httpSession.setAttribute(entry.getKey(), entry.getValue());
         }
     }
 
