@@ -6,9 +6,14 @@ import itu.framework.annotation.Json;
 import itu.framework.annotation.RequestParameter;
 import itu.framework.annotation.Session;
 import itu.framework.annotation.Url;
+import itu.framework.web.UploadFile;
+import itu.framework.scan.ParameterTypeValidator;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
+import java.lang.reflect.ParameterizedType;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -31,6 +36,8 @@ public class ControllerScanner {
         private List<String> parameterNames;
         // Liste des types de paramètres
         private List<Class<?>> parameterTypes;
+        // Liste des types génériques des paramètres
+        private List<Type> genericParameterTypes;
         // Liste des clés RequestParameter (null si pas d'annotation)
         private List<String> parameterKeys;
         // Pattern pour matcher les URL avec variables ex: /employe/{id}
@@ -49,6 +56,7 @@ public class ControllerScanner {
             this.method = method;
             this.parameterNames = new ArrayList<>();
             this.parameterTypes = new ArrayList<>();
+            this.genericParameterTypes = new ArrayList<>();
             this.parameterKeys = new ArrayList<>();
             this.pathParamNames = new ArrayList<>();
             this.isJsonMethod = false;
@@ -77,6 +85,14 @@ public class ControllerScanner {
         
         public void setParameterTypes(List<Class<?>> parameterTypes) {
             this.parameterTypes = parameterTypes;
+        }
+        
+        public List<Type> getGenericParameterTypes() {
+            return genericParameterTypes;
+        }
+        
+        public void setGenericParameterTypes(List<Type> genericParameterTypes) {
+            this.genericParameterTypes = genericParameterTypes;
         }
         
         public List<String> getParameterKeys() {
@@ -213,8 +229,10 @@ public class ControllerScanner {
                 
                 // Extraction des paramètres de la méthode
                 Parameter[] parameters = method.getParameters();
+                Type[] genericParameterTypesArray = method.getGenericParameterTypes();
                 List<String> paramNames = new ArrayList<>();
                 List<Class<?>> paramTypes = new ArrayList<>();
+                List<Type> genericParamTypes = new ArrayList<>();
                 List<String> paramKeys = new ArrayList<>();
                 
                 boolean hasMapParam = false;
@@ -224,6 +242,7 @@ public class ControllerScanner {
                 for (int i = 0; i < parameters.length; i++) {
                     Parameter param = parameters[i];
                     Class<?> paramType = param.getType();
+                    Type genericType = genericParameterTypesArray[i];
                     
                     // Vérifier si le paramètre est annoté @Session
                     boolean isSessionParam = param.isAnnotationPresent(Session.class);
@@ -255,6 +274,8 @@ public class ControllerScanner {
                         // OK - String accepté
                     } else if (paramType == byte[].class) {
                         // OK - byte[] accepté pour les uploads de fichiers
+                    } else if (paramType.getName().equals("itu.framework.web.UploadFile")) {
+                        // OK - UploadFile accepté pour les uploads de fichiers
                     } else if (paramType == Map.class || paramType == HashMap.class) {
                         // Si c'est un @Session, on le laisse passer
                         if (!isSessionParam) {
@@ -267,6 +288,44 @@ public class ControllerScanner {
                             }
                             hasMapParam = true;
                         }
+                        if (hasMapParam) {
+                            throw new IllegalArgumentException(
+                                "[ControllerScanner] ERREUR: La méthode " + controllerClass.getSimpleName() +
+                                "." + method.getName() + "() ne peut avoir qu'UN SEUL paramètre de type Map."
+                            );
+                        }
+
+                        // 🔒 Vérification Map<String, Object> ou Map<String, UploadFile>
+                        if (!(genericType instanceof ParameterizedType)) {
+                            throw new IllegalArgumentException(
+                                "[ControllerScanner] ERREUR: Le paramètre Map doit être typé Map<String, Object> ou Map<String, UploadFile> dans " +
+                                controllerClass.getSimpleName() + "." + method.getName() + "()"
+                            );
+                        }
+
+                        ParameterizedType paramTypeGeneric = (ParameterizedType) genericType;
+                        Type[] typeArgs = paramTypeGeneric.getActualTypeArguments();
+
+                        if (typeArgs.length != 2 || typeArgs[0] != String.class) {
+                            throw new IllegalArgumentException(
+                                "[ControllerScanner] ERREUR: Le paramètre Map doit avoir String comme premier type dans " +
+                                controllerClass.getSimpleName() + "." + method.getName() + "()"
+                            );
+                        }
+                        
+                        // Vérifier que le second type est Object ou UploadFile
+                        boolean isValidSecondType = typeArgs[1] == Object.class || 
+                                                   (typeArgs[1] instanceof Class<?> && 
+                                                    ((Class<?>) typeArgs[1]).getName().equals("itu.framework.web.UploadFile"));
+                        
+                        if (!isValidSecondType) {
+                            throw new IllegalArgumentException(
+                                "[ControllerScanner] ERREUR: Le paramètre Map doit être STRICTEMENT de type Map<String, Object> ou Map<String, UploadFile> dans " +
+                                controllerClass.getSimpleName() + "." + method.getName() + "()"
+                            );
+                        }
+
+                        hasMapParam = true;
                     } else if (paramType.isPrimitive() || paramType.isInterface()) {
                         // Interdire les types primitifs, interfaces
                         throw new IllegalArgumentException(
@@ -277,10 +336,18 @@ public class ControllerScanner {
                         );
                     } else {
                         // OK - Classe POJO personnalisée (sprint 8 bis)
+                        // Validation: le type POJO doit être dans le package parent du contrôleur
+                        ParameterTypeValidator.validateParameterType(
+                            paramType, 
+                            controllerClass, 
+                            param.getName(), 
+                            method.getName()
+                        );
                     }
                     
                     paramNames.add(param.getName());
                     paramTypes.add(paramType);
+                    genericParamTypes.add(genericType);
                     
                     // Vérifier si le paramètre a l'annotation @RequestParameter
                     RequestParameter reqParam = param.getAnnotation(RequestParameter.class);
@@ -291,6 +358,7 @@ public class ControllerScanner {
                     }
                 }
 
+                // VALIDATION: Si des url avec {}          
                 if (!pathParams.isEmpty()) {
                     for (String pathParam : pathParams) {
                         int idx = paramNames.indexOf(pathParam);
@@ -313,6 +381,7 @@ public class ControllerScanner {
                 
                 methodInfo.setParameterNames(paramNames);
                 methodInfo.setParameterTypes(paramTypes);
+                methodInfo.setGenericParameterTypes(genericParamTypes);
                 methodInfo.setParameterKeys(paramKeys);
                 methodInfo.setSessionParameterIndex(sessionParamIndex);
 
@@ -332,7 +401,7 @@ public class ControllerScanner {
                     }
                     
                     mappings.put(key, methodInfo);
-
+                    
                 }
             }
         }
