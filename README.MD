@@ -22,6 +22,8 @@
         si erreur : error : ""
         }
     si type ModelView mettre dans data le data aadans modelView sinon mettre dans data l objet retourne par la methode annotee
-- sprint 10 : upload de fichier -> getParts a verifier si ya fichier attache dans req -> prendre nom et convertir en bytes -> adapter les args de fonction annote en Map
+- sprint 10 : upload de fichier -> getParts a verifier si ya fichier attache dans req -> prendre nom et convertir en bytes -> adapter les args de fonction annote en Map (classe nomfichier et extension)
+
+- sprint 11 : gestion de session par la creation de classe Map<String, Object> annote session (dans front servlet prendre le contenu de HttpSession et mettre dans la map)
 
 est il possible de rendre les controllers en singleton
