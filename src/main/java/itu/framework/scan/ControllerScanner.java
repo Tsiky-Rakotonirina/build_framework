@@ -332,7 +332,7 @@ public class ControllerScanner {
                             "[ControllerScanner] ERREUR: La méthode " + controllerClass.getSimpleName() + 
                             "." + method.getName() + "() a un paramètre '" + param.getName() + 
                             "' de type " + paramType.getSimpleName() + 
-                            ". Les paramètres doivent être String, byte[], Map, @Session Map ou des classes POJO."
+                            ". Les paramètres doivent être String, UploadFile, Map, @Session Map ou des classes POJO."
                         );
                     } else {
                         // OK - Classe POJO personnalisée (sprint 8 bis)

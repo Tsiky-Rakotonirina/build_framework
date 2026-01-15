@@ -190,18 +190,8 @@ public class FrontServlet extends HttpServlet {
         List<java.lang.reflect.Type> genericTypes = methodInfo.getGenericParameterTypes();
         Object[] args = new Object[paramNames.size()];
         
-        // Extraire les fichiers uploadés uniquement si nécessaire (présence de byte[] ou Map)
-        Map<String, byte[]> uploadedFiles = new HashMap<>();
-        boolean needsFiles = false;
-        for (Class<?> type : paramTypes) {
-            if (type == byte[].class || type == Map.class || type == HashMap.class) {
-                needsFiles = true;
-                break;
-            }
-        }
-        if (needsFiles) {
-            uploadedFiles = extractUploadedFiles(req);
-        }
+        // Extraire les fichiers uploadés
+        Map<String, UploadFile> uploadedFiles = extractUploadedFiles(req);
 
         for (int i = 0; i < paramNames.size(); i++) {
             String paramName = paramNames.get(i);
@@ -212,9 +202,7 @@ public class FrontServlet extends HttpServlet {
             // Vérifier si c'est le paramètre @Session
             if (i == methodInfo.getSessionParameterIndex()) {
                 args[i] = sessionMap;
-            } else if (paramType == Map.class || paramType == HashMap.class) {
-                args[i] = createParamMap(req, httpMethod, uploadedFiles);
-            if (paramType == UploadFile.class) {
+            } else if (paramType == UploadFile.class) {
                 // Si le type est UploadFile, mettre le premier fichier de getParts
                 String fileKey = (paramKey != null) ? paramKey : paramName;
                 UploadFile file = uploadedFiles.get(fileKey);
@@ -234,11 +222,6 @@ public class FrontServlet extends HttpServlet {
                 }
             } else if (paramType == String.class) {
                 args[i] = resolveStringParameter(req, paramName, paramKey);
-            } else if (paramType == byte[].class) {
-                // Chercher le fichier uploadé par le nom du paramètre ou @RequestParameter
-                String fileKey = (paramKey != null) ? paramKey : paramName;
-                UploadFile uploadFile = uploadedFiles.get(fileKey);
-                args[i] = (uploadFile != null) ? uploadFile.getContent() : null;
             } else {
                 args[i] = bindPojoParameter(req, paramName, paramType, uploadedFiles);
             }
@@ -379,7 +362,7 @@ public class FrontServlet extends HttpServlet {
             }
         }
         
-        // Traiter ensuite les fichiers uploadés pour les champs UploadFile, Map<String, UploadFile> et byte[]
+        // Traiter ensuite les fichiers uploadés pour les champs UploadFile et Map<String, UploadFile>
         for (Field field : paramType.getDeclaredFields()) {
             field.setAccessible(true);
             String fieldName = field.getName();
@@ -397,12 +380,6 @@ public class FrontServlet extends HttpServlet {
                 java.lang.reflect.Type genericFieldType = field.getGenericType();
                 if (isMapOfUploadFile(genericFieldType)) {
                     field.set(pojoInstance, uploadedFiles);
-                }
-            } else if (field.getType() == byte[].class) {
-                // Compatibilité avec l'ancien système byte[]
-                if (uploadedFiles.containsKey(fieldName)) {
-                    UploadFile uploadFile = uploadedFiles.get(fieldName);
-                    field.set(pojoInstance, uploadFile.getContent());
                 }
             }
         }
