@@ -4,6 +4,7 @@ import itu.framework.annotation.Controller;
 import itu.framework.annotation.HttpMethod;
 import itu.framework.annotation.Json;
 import itu.framework.annotation.RequestParameter;
+import itu.framework.annotation.Session;
 import itu.framework.annotation.Url;
 import itu.framework.web.UploadFile;
 import itu.framework.scan.ParameterTypeValidator;
@@ -47,6 +48,8 @@ public class ControllerScanner {
         private String urlPattern;
         // Indique si la méthode est annotée avec @Json
         private boolean isJsonMethod;
+        // Index du paramètre annoté @Session (-1 si aucun)
+        private int sessionParameterIndex;
         
         public MethodInfo(Class<?> controllerClass, Method method) {
             this.controllerClass = controllerClass;
@@ -57,6 +60,7 @@ public class ControllerScanner {
             this.parameterKeys = new ArrayList<>();
             this.pathParamNames = new ArrayList<>();
             this.isJsonMethod = false;
+            this.sessionParameterIndex = -1;
         }
         
         public Class<?> getControllerClass() {
@@ -122,6 +126,12 @@ public class ControllerScanner {
         public boolean isJsonMethod() { return isJsonMethod; }
 
         public void setJsonMethod(boolean jsonMethod) { isJsonMethod = jsonMethod; }
+        
+        public int getSessionParameterIndex() { return sessionParameterIndex; }
+        
+        public void setSessionParameterIndex(int sessionParameterIndex) { 
+            this.sessionParameterIndex = sessionParameterIndex; 
+        }
     }
     
     /**
@@ -226,13 +236,40 @@ public class ControllerScanner {
                 List<String> paramKeys = new ArrayList<>();
                 
                 boolean hasMapParam = false;
+                boolean hasSessionParam = false;
+                int sessionParamIndex = -1;
                 
                 for (int i = 0; i < parameters.length; i++) {
                     Parameter param = parameters[i];
                     Class<?> paramType = param.getType();
                     Type genericType = genericParameterTypesArray[i];
                     
-                    // VALIDATION: String, byte[], UploadFile, Map<String, Object>, Map<String, UploadFile> OU classes POJO personnalisées
+                    // Vérifier si le paramètre est annoté @Session
+                    boolean isSessionParam = param.isAnnotationPresent(Session.class);
+                    
+                    if (isSessionParam) {
+                        // Vérifier qu'il n'y a qu'un seul @Session
+                        if (hasSessionParam) {
+                            throw new IllegalArgumentException(
+                                "[ControllerScanner] ERREUR: La méthode " + controllerClass.getSimpleName() +
+                                "." + method.getName() + "() ne peut avoir qu'UN SEUL paramètre annoté @Session."
+                            );
+                        }
+                        
+                        // Vérifier que le type est Map
+                        if (paramType != Map.class && paramType != HashMap.class) {
+                            throw new IllegalArgumentException(
+                                "[ControllerScanner] ERREUR: Le paramètre annoté @Session doit être de type Map<String, Object> dans " +
+                                controllerClass.getSimpleName() + "." + method.getName() + "()"
+                            );
+                        }
+                        
+                        hasSessionParam = true;
+                        sessionParamIndex = i;
+                        // Un paramètre @Session ne compte pas comme Map standard
+                    }
+                    
+                    // VALIDATION: String, byte[], Map<String, Object>, @Session Map OU classes POJO personnalisées
                     if (paramType == String.class) {
                         // OK - String accepté
                     } else if (paramType == byte[].class) {
@@ -240,6 +277,17 @@ public class ControllerScanner {
                     } else if (paramType.getName().equals("itu.framework.web.UploadFile")) {
                         // OK - UploadFile accepté pour les uploads de fichiers
                     } else if (paramType == Map.class || paramType == HashMap.class) {
+                        // Si c'est un @Session, on le laisse passer
+                        if (!isSessionParam) {
+                            // Vérifier qu'il n'y a qu'un seul Map non-@Session
+                            if (hasMapParam) {
+                                throw new IllegalArgumentException(
+                                    "[ControllerScanner] ERREUR: La méthode " + controllerClass.getSimpleName() + 
+                                    "." + method.getName() + "() ne peut avoir qu'UN SEUL paramètre de type Map (hors @Session)."
+                                );
+                            }
+                            hasMapParam = true;
+                        }
                         if (hasMapParam) {
                             throw new IllegalArgumentException(
                                 "[ControllerScanner] ERREUR: La méthode " + controllerClass.getSimpleName() +
@@ -284,7 +332,7 @@ public class ControllerScanner {
                             "[ControllerScanner] ERREUR: La méthode " + controllerClass.getSimpleName() + 
                             "." + method.getName() + "() a un paramètre '" + param.getName() + 
                             "' de type " + paramType.getSimpleName() + 
-                            ". Les paramètres doivent être String, byte[], UploadFile, Map ou des classes POJO."
+                            ". Les paramètres doivent être String, UploadFile, Map, @Session Map ou des classes POJO."
                         );
                     } else {
                         // OK - Classe POJO personnalisée (sprint 8 bis)
@@ -335,6 +383,7 @@ public class ControllerScanner {
                 methodInfo.setParameterTypes(paramTypes);
                 methodInfo.setGenericParameterTypes(genericParamTypes);
                 methodInfo.setParameterKeys(paramKeys);
+                methodInfo.setSessionParameterIndex(sessionParamIndex);
 
                 // Enregistrer pour chaque méthode HTTP
                 for (String httpMethod : httpMethods) {

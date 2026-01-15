@@ -92,8 +92,29 @@ public class FrontServlet extends HttpServlet {
             Method method = methodInfo.getMethod();
             Class<?> returnType = method.getReturnType();
             Object controllerInstance = methodInfo.getControllerClass().getDeclaredConstructor().newInstance();
-            Object[] args = buildMethodArguments(req, httpMethod, methodInfo);
+            
+            // Créer une Map pour @Session si nécessaire
+            Map<String, Object> sessionMap = null;
+            int sessionParamIndex = methodInfo.getSessionParameterIndex();
+            if (sessionParamIndex >= 0) {
+                sessionMap = new HashMap<>();
+                // Charger toutes les données de HttpSession dans la Map
+                jakarta.servlet.http.HttpSession httpSession = req.getSession();
+                java.util.Enumeration<String> attributeNames = httpSession.getAttributeNames();
+                while (attributeNames.hasMoreElements()) {
+                    String attrName = attributeNames.nextElement();
+                    sessionMap.put(attrName, httpSession.getAttribute(attrName));
+                }
+            }
+            
+            Object[] args = buildMethodArguments(req, httpMethod, methodInfo, sessionMap);
             Object result = method.invoke(controllerInstance, args);
+            
+            // Synchroniser la Map @Session avec HttpSession après l'exécution
+            if (sessionParamIndex >= 0 && sessionMap != null) {
+                synchronizeSessionMap(req, sessionMap);
+            }
+            
             processResult(resp, returnType, result, req, methodInfo);
         } catch (Exception e) {
             renderExecutionError(resp, e);
@@ -161,25 +182,16 @@ public class FrontServlet extends HttpServlet {
 
     private Object[] buildMethodArguments(HttpServletRequest req,
                                           String httpMethod,
-                                          ControllerScanner.MethodInfo methodInfo) throws ReflectiveOperationException, ServletException, IOException {
+                                          ControllerScanner.MethodInfo methodInfo,
+                                          Map<String, Object> sessionMap) throws ReflectiveOperationException, ServletException, IOException {
         List<String> paramNames = methodInfo.getParameterNames();
         List<Class<?>> paramTypes = methodInfo.getParameterTypes();
         List<String> paramKeys = methodInfo.getParameterKeys();
         List<java.lang.reflect.Type> genericTypes = methodInfo.getGenericParameterTypes();
         Object[] args = new Object[paramNames.size()];
         
-        // Extraire les fichiers uploadés uniquement si nécessaire (présence de byte[] ou Map)
-        Map<String, byte[]> uploadedFiles = new HashMap<>();
-        boolean needsFiles = false;
-        for (Class<?> type : paramTypes) {
-            if (type == byte[].class || type == Map.class || type == HashMap.class) {
-                needsFiles = true;
-                break;
-            }
-        }
-        if (needsFiles) {
-            uploadedFiles = extractUploadedFiles(req);
-        }
+        // Extraire les fichiers uploadés
+        Map<String, UploadFile> uploadedFiles = extractUploadedFiles(req);
 
         for (int i = 0; i < paramNames.size(); i++) {
             String paramName = paramNames.get(i);
@@ -187,7 +199,10 @@ public class FrontServlet extends HttpServlet {
             String paramKey = (paramKeys != null && i < paramKeys.size()) ? paramKeys.get(i) : null;
             java.lang.reflect.Type genericType = (genericTypes != null && i < genericTypes.size()) ? genericTypes.get(i) : null;
 
-            if (paramType == UploadFile.class) {
+            // Vérifier si c'est le paramètre @Session
+            if (i == methodInfo.getSessionParameterIndex()) {
+                args[i] = sessionMap;
+            } else if (paramType == UploadFile.class) {
                 // Si le type est UploadFile, mettre le premier fichier de getParts
                 String fileKey = (paramKey != null) ? paramKey : paramName;
                 UploadFile file = uploadedFiles.get(fileKey);
@@ -207,11 +222,6 @@ public class FrontServlet extends HttpServlet {
                 }
             } else if (paramType == String.class) {
                 args[i] = resolveStringParameter(req, paramName, paramKey);
-            } else if (paramType == byte[].class) {
-                // Chercher le fichier uploadé par le nom du paramètre ou @RequestParameter
-                String fileKey = (paramKey != null) ? paramKey : paramName;
-                UploadFile uploadFile = uploadedFiles.get(fileKey);
-                args[i] = (uploadFile != null) ? uploadFile.getContent() : null;
             } else {
                 args[i] = bindPojoParameter(req, paramName, paramType, uploadedFiles);
             }
@@ -352,7 +362,7 @@ public class FrontServlet extends HttpServlet {
             }
         }
         
-        // Traiter ensuite les fichiers uploadés pour les champs UploadFile, Map<String, UploadFile> et byte[]
+        // Traiter ensuite les fichiers uploadés pour les champs UploadFile et Map<String, UploadFile>
         for (Field field : paramType.getDeclaredFields()) {
             field.setAccessible(true);
             String fieldName = field.getName();
@@ -370,12 +380,6 @@ public class FrontServlet extends HttpServlet {
                 java.lang.reflect.Type genericFieldType = field.getGenericType();
                 if (isMapOfUploadFile(genericFieldType)) {
                     field.set(pojoInstance, uploadedFiles);
-                }
-            } else if (field.getType() == byte[].class) {
-                // Compatibilité avec l'ancien système byte[]
-                if (uploadedFiles.containsKey(fieldName)) {
-                    UploadFile uploadFile = uploadedFiles.get(fieldName);
-                    field.set(pojoInstance, uploadFile.getContent());
                 }
             }
         }
@@ -644,6 +648,38 @@ public class FrontServlet extends HttpServlet {
         }
     }
 
+    /**
+     * Synchronise la Map @Session avec HttpSession
+     * Toutes les modifications dans la Map sont répercutées dans HttpSession
+     */
+    private void synchronizeSessionMap(HttpServletRequest req, Map<String, Object> sessionMap) {
+        jakarta.servlet.http.HttpSession httpSession = req.getSession();
+        
+        // D'abord, supprimer les attributs qui ont été retirés de la Map
+        java.util.Enumeration<String> attributeNames = httpSession.getAttributeNames();
+        java.util.List<String> toRemove = new java.util.ArrayList<>();
+        while (attributeNames.hasMoreElements()) {
+            String attrName = attributeNames.nextElement();
+            if (!sessionMap.containsKey(attrName)) {
+                toRemove.add(attrName);
+            }
+        }
+        for (String attrName : toRemove) {
+            httpSession.removeAttribute(attrName);
+        }
+        
+        // Ensuite, mettre à jour ou ajouter les attributs de la Map
+        for (Map.Entry<String, Object> entry : sessionMap.entrySet()) {
+            httpSession.setAttribute(entry.getKey(), entry.getValue());
+        }
+    }
+
+    /**
+     * Gère les réponses JSON pour les méthodes annotées avec @Json
+     * Si la méthode retourne une JsonResponse, on la sérialise directement
+     * Si elle retourne un ModelView, on extrait les données et les met dans la réponse
+     * Sinon, on enveloppe l'objet dans une réponse JSON de succès
+     */
     private void handleJsonResponse(HttpServletResponse resp, Class<?> returnType, Object result) throws IOException {
         resp.setContentType("application/json; charset=UTF-8");
         PrintWriter out = resp.getWriter();

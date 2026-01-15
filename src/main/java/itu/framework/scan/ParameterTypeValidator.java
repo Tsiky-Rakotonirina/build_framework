@@ -13,7 +13,7 @@ public class ParameterTypeValidator {
     /**
      * Vérifie si un type de paramètre est valide pour une méthode de contrôleur.
      * Les types autorisés sont:
-     * - Types primitifs et wrappers de Java (String, byte[], etc.)
+     * - Types primitifs et wrappers de Java (String, etc.)
      * - Types du framework (UploadFile, Map)
      * - Types personnalisés (POJO) qui doivent être dans le package parent du contrôleur
      * 
@@ -67,7 +67,7 @@ public class ParameterTypeValidator {
         
         // String et types courants
         if (type == String.class || 
-            type == byte[].class ||
+
             type == Object.class) {
             return true;
         }
