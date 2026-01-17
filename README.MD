@@ -25,5 +25,4 @@
 - sprint 10 : upload de fichier -> getParts a verifier si ya fichier attache dans req -> prendre nom et convertir en bytes -> adapter les args de fonction annote en Map (classe nomfichier et extension)
 
 - sprint 11 : gestion de session par la creation de classe Map<String, Object> annote session (dans front servlet prendre le contenu de HttpSession et mettre dans la map)
-
-est il possible de rendre les controllers en singleton
+sprint 11 bis : annotation @role et @Authorized qui est le seul capable de faire la fonction 
