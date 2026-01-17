@@ -19,6 +19,8 @@ public class FrameworkListener implements ServletContextListener {
     
     public static final String MAPPINGS_KEY = "urlMappings";
     public static final String SCAN_PACKAGE_PARAM = "scanPackage";
+    public static final String AUTH_ATTRIBUTE_KEY = "authAttribute";
+    public static final String ROLE_ATTRIBUTE_KEY = "roleAttribute";
     
     @Override
     public void contextInitialized(ServletContextEvent sce) {
@@ -43,6 +45,20 @@ public class FrameworkListener implements ServletContextListener {
         }
         
         System.out.println("[FrameworkListener] Package à scanner: " + scanPackage);
+        
+        // Récupération des paramètres d'autorisation depuis web.xml (init-param du servlet)
+        String authAttribute = servletContext.getInitParameter(AUTH_ATTRIBUTE_KEY);
+        String roleAttribute = servletContext.getInitParameter(ROLE_ATTRIBUTE_KEY);
+        
+        if (authAttribute != null && !authAttribute.trim().isEmpty()) {
+            servletContext.setAttribute(AUTH_ATTRIBUTE_KEY, authAttribute);
+            System.out.println("[FrameworkListener] Auth attribute configuré: " + authAttribute);
+        }
+        
+        if (roleAttribute != null && !roleAttribute.trim().isEmpty()) {
+            servletContext.setAttribute(ROLE_ATTRIBUTE_KEY, roleAttribute);
+            System.out.println("[FrameworkListener] Role attribute configuré: " + roleAttribute);
+        }
         
         // Scan des contrôleurs et récupération des mappings
         // Map avec clé = "METHOD:URL" et valeur = MethodInfo (classe + méthode)

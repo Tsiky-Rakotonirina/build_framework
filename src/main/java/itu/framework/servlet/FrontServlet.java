@@ -7,6 +7,8 @@ import itu.framework.web.ModelView;
 import itu.framework.web.JsonResponse;
 import itu.framework.web.LocalDateAdapter;
 import itu.framework.web.UploadFile;
+import itu.framework.annotation.Authorized;
+import itu.framework.annotation.Role;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -107,6 +109,14 @@ public class FrontServlet extends HttpServlet {
                 }
             }
             
+            // Vérification des autorisations AVANT l'exécution de la méthode
+            String authError = checkAuthorization(method, req, sessionMap);
+            if (authError != null) {
+                resp.setStatus(HttpServletResponse.SC_FORBIDDEN);
+                sendHtmlMessage(resp, "<p style='color:red;'>" + authError + "</p>");
+                return;
+            }
+            
             Object[] args = buildMethodArguments(req, httpMethod, methodInfo, sessionMap);
             Object result = method.invoke(controllerInstance, args);
             
@@ -119,6 +129,97 @@ public class FrontServlet extends HttpServlet {
         } catch (Exception e) {
             renderExecutionError(resp, e);
         }
+    }
+
+    /**
+     * Vérifie si la méthode peut être exécutée selon les annotations @Authorized et @Role
+     * Retourne un message d'erreur si l'accès est refusé, null sinon
+     */
+    private String checkAuthorization(Method method, HttpServletRequest req, Map<String, Object> sessionMap) {
+        // Récupérer les attributs de configuration depuis ServletContext
+        String authAttributeName = (String) getServletContext().getAttribute(FrameworkListener.AUTH_ATTRIBUTE_KEY);
+        String roleAttributeName = (String) getServletContext().getAttribute(FrameworkListener.ROLE_ATTRIBUTE_KEY);
+        
+        // Vérification @Authorized
+        if (method.isAnnotationPresent(Authorized.class)) {
+            if (authAttributeName == null || authAttributeName.trim().isEmpty()) {
+                return "Erreur: @Authorized est utilisé mais authAttribute n'est pas configuré dans web.xml";
+            }
+            
+            // Chercher l'attribut d'authentification dans HttpSession ou @Session Map
+            Object authValue = null;
+            jakarta.servlet.http.HttpSession httpSession = req.getSession(false);
+            
+            // Vérifier d'abord dans HttpSession
+            if (httpSession != null) {
+                authValue = httpSession.getAttribute(authAttributeName);
+            }
+            
+            // Si pas trouvé dans HttpSession, vérifier dans @Session Map
+            if (authValue == null && sessionMap != null) {
+                authValue = sessionMap.get(authAttributeName);
+            }
+            
+            if (authValue == null) {
+                return "Accès refusé: authentification requise (attribut '" + authAttributeName + "' introuvable)";
+            }
+        }
+        
+        // Vérification @Role
+        if (method.isAnnotationPresent(Role.class)) {
+            if (roleAttributeName == null || roleAttributeName.trim().isEmpty()) {
+                return "Erreur: @Role est utilisé mais roleAttribute n'est pas configuré dans web.xml";
+            }
+            
+            Role roleAnnotation = method.getAnnotation(Role.class);
+            String requiredRolesStr = roleAnnotation.value();
+            
+            // Séparer les rôles requis (par virgule)
+            String[] requiredRoles = requiredRolesStr.split(",");
+            for (int i = 0; i < requiredRoles.length; i++) {
+                requiredRoles[i] = requiredRoles[i].trim();
+            }
+            
+            // Chercher l'attribut de rôle dans HttpSession ou @Session Map
+            Object roleValue = null;
+            jakarta.servlet.http.HttpSession httpSession = req.getSession(false);
+            
+            // Vérifier d'abord dans HttpSession
+            if (httpSession != null) {
+                roleValue = httpSession.getAttribute(roleAttributeName);
+            }
+            
+            // Si pas trouvé dans HttpSession, vérifier dans @Session Map
+            if (roleValue == null && sessionMap != null) {
+                roleValue = sessionMap.get(roleAttributeName);
+            }
+            
+            if (roleValue == null) {
+                return "Accès refusé: rôle requis mais attribut '" + roleAttributeName + "' introuvable";
+            }
+            
+            // Le rôle doit être un String
+            if (!(roleValue instanceof String)) {
+                return "Erreur: le rôle doit être de type String (type trouvé: " + roleValue.getClass().getSimpleName() + ")";
+            }
+            
+            String userRole = (String) roleValue;
+            
+            // Vérifier si le rôle de l'utilisateur correspond à au moins un des rôles requis
+            boolean hasRole = false;
+            for (String requiredRole : requiredRoles) {
+                if (userRole.equals(requiredRole)) {
+                    hasRole = true;
+                    break;
+                }
+            }
+            
+            if (!hasRole) {
+                return "Accès refusé: rôle insuffisant. Rôle(s) requis: " + requiredRolesStr + ", votre rôle: " + userRole;
+            }
+        }
+        
+        return null; // Accès autorisé
     }
 
     private ControllerScanner.MethodInfo resolveMethodInfo(HttpServletRequest req,
