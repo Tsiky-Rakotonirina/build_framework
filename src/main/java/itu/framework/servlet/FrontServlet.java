@@ -6,9 +6,8 @@ import itu.framework.scan.ControllerScanner.MethodInfo;
 import itu.framework.web.ModelView;
 import itu.framework.web.JsonResponse;
 import itu.framework.web.LocalDateAdapter;
+import itu.framework.web.SessionMap;
 import itu.framework.web.UploadFile;
-import itu.framework.annotation.Authorized;
-import itu.framework.annotation.Role;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -24,6 +23,7 @@ import jakarta.servlet.http.Part;
 
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.ParameterizedType;
@@ -60,29 +60,27 @@ public class FrontServlet extends HttpServlet {
     private void handleRequest(HttpServletRequest req, HttpServletResponse resp, String httpMethod) throws ServletException, IOException {
         resp.setContentType("text/html; charset=UTF-8");
         
-        // Récupération de l'URI demandée
+        // 1. Extraire le path de la requête
         String requestURI = req.getRequestURI();
         String contextPath = req.getContextPath();
         String path = requestURI.substring(contextPath.length());
         
-        // Si le path est vide, mettre "/"
         if (path == null || path.isEmpty()) {
             path = "/";
         }
         
-        // Récupération des mappings depuis ServletContext
+        // 2. Récupérer les mappings depuis ServletContext
         @SuppressWarnings("unchecked")
         Map<String, ControllerScanner.MethodInfo> mappings = 
             (Map<String, ControllerScanner.MethodInfo>) getServletContext().getAttribute(FrameworkListener.MAPPINGS_KEY);
-        
-        // Création de la clé METHOD:URL
-        String key = httpMethod + ":" + path;
         
         if (mappings == null) {
             sendHtmlMessage(resp, "<p>ServletContext non initialisé (aucun mapping disponible)</p>");
             return;
         }
 
+        // 3. Résoudre la méthode correspondant à URL + HTTP Method
+        String key = httpMethod + ":" + path;
         ControllerScanner.MethodInfo methodInfo = resolveMethodInfo(req, httpMethod, path, key, mappings);
 
         if (methodInfo == null) {
@@ -95,131 +93,168 @@ public class FrontServlet extends HttpServlet {
             Class<?> returnType = method.getReturnType();
             Object controllerInstance = methodInfo.getControllerClass().getDeclaredConstructor().newInstance();
             
-            // Créer une Map pour @Session si nécessaire
-            Map<String, Object> sessionMap = null;
-            int sessionParamIndex = methodInfo.getSessionParameterIndex();
-            if (sessionParamIndex >= 0) {
-                sessionMap = new HashMap<>();
-                // Charger toutes les données de HttpSession dans la Map
-                jakarta.servlet.http.HttpSession httpSession = req.getSession();
-                java.util.Enumeration<String> attributeNames = httpSession.getAttributeNames();
-                while (attributeNames.hasMoreElements()) {
-                    String attrName = attributeNames.nextElement();
-                    sessionMap.put(attrName, httpSession.getAttribute(attrName));
-                }
-            }
-            
-            // Vérification des autorisations AVANT l'exécution de la méthode
-            String authError = checkAuthorization(method, req, sessionMap);
+            // 4. VÉRIFICATION DES AUTORISATIONS (AVANT tout traitement de session)
+            //    On utilise getSession(false) pour ne pas créer de session si elle n'existe pas
+            String authError = checkAuthorization(method, req);
             if (authError != null) {
+                // Accès refusé - retourner 403
                 resp.setStatus(HttpServletResponse.SC_FORBIDDEN);
-                sendHtmlMessage(resp, "<p style='color:red;'>" + authError + "</p>");
+                if (methodInfo.isJsonMethod()) {
+                    resp.setContentType("application/json; charset=UTF-8");
+                    PrintWriter out = resp.getWriter();
+                    out.print("{\"success\":false,\"error\":\"" + escapeJson(authError) + "\"}");
+                } else {
+                    sendHtmlMessage(resp, "<p style='color:red;'>" + authError + "</p>");
+                }
                 return;
             }
             
-            Object[] args = buildMethodArguments(req, httpMethod, methodInfo, sessionMap);
-            Object result = method.invoke(controllerInstance, args);
-            
-            // Synchroniser la Map @Session avec HttpSession après l'exécution
-            if (sessionParamIndex >= 0 && sessionMap != null) {
-                synchronizeSessionMap(req, sessionMap);
+            // 5. Créer une SessionMap synchronisée si @Session est utilisée (APRÈS la vérification d'autorisation)
+            //    SessionMap maintient une synchronisation bidirectionnelle avec HttpSession
+            SessionMap sessionMap = null;
+            int sessionParamIndex = methodInfo.getSessionParameterIndex();
+            if (sessionParamIndex >= 0) {
+                // Créer ou récupérer la session HTTP (getSession(true) crée si elle n'existe pas)
+                jakarta.servlet.http.HttpSession httpSession = req.getSession(true);
+                // SessionMap synchronise automatiquement les changements avec HttpSession
+                sessionMap = new SessionMap(httpSession);
             }
             
+            // 6. Construire les arguments de la méthode
+            Object[] args = buildMethodArguments(req, httpMethod, methodInfo, sessionMap);
+            
+            // 7. Exécuter la méthode du contrôleur
+            Object result = method.invoke(controllerInstance, args);
+            
+            // 8. Pas besoin de synchroniser manuellement : SessionMap le fait automatiquement
+            //    Toutes les modifications (put/remove/clear) sont immédiatement répercutées dans HttpSession
+            
+            // 9. Traiter le résultat (JSON, ModelView, String)
             processResult(resp, returnType, result, req, methodInfo);
+            
         } catch (Exception e) {
             renderExecutionError(resp, e);
         }
     }
 
     /**
-     * Vérifie si la méthode peut être exécutée selon les annotations @Authorized et @Role
-     * Retourne un message d'erreur si l'accès est refusé, null sinon
+     * Vérifie si la méthode peut être exécutée selon les annotations @Authorized et @Role.
+     * Utilise la comparaison par nom d'annotation pour éviter les problèmes de classloader.
+     * 
+     * @return un message d'erreur si l'accès est refusé, null si l'accès est autorisé
      */
-    private String checkAuthorization(Method method, HttpServletRequest req, Map<String, Object> sessionMap) {
-        // Récupérer les attributs de configuration depuis ServletContext
+    private String checkAuthorization(Method method, HttpServletRequest req) {
+        // Récupérer les attributs de configuration depuis web.xml
         String authAttributeName = (String) getServletContext().getAttribute(FrameworkListener.AUTH_ATTRIBUTE_KEY);
         String roleAttributeName = (String) getServletContext().getAttribute(FrameworkListener.ROLE_ATTRIBUTE_KEY);
         
-        // Vérification @Authorized
-        if (method.isAnnotationPresent(Authorized.class)) {
+        // Récupérer la session HTTP existante (SANS en créer une nouvelle!)
+        jakarta.servlet.http.HttpSession httpSession = req.getSession(false);
+        
+        // Chercher les annotations par leur nom canonique (évite les problèmes de classloader)
+        Annotation authorizedAnnotation = findAnnotationByName(method, "itu.framework.annotation.Authorized");
+        Annotation roleAnnotation = findAnnotationByName(method, "itu.framework.annotation.Role");
+        System.out.println("Authorized Annotation: " + authorizedAnnotation);
+        System.out.println("Role Annotation: " + roleAnnotation);
+        // ===== Vérification @Authorized =====
+        if (authorizedAnnotation != null) {
             if (authAttributeName == null || authAttributeName.trim().isEmpty()) {
-                return "Erreur: @Authorized est utilisé mais authAttribute n'est pas configuré dans web.xml";
+                return "Erreur: @Authorized utilisé mais 'authAttribute' non configuré dans web.xml";
             }
             
-            // Chercher l'attribut d'authentification dans HttpSession ou @Session Map
-            Object authValue = null;
-            jakarta.servlet.http.HttpSession httpSession = req.getSession(false);
-            
-            // Vérifier d'abord dans HttpSession
-            if (httpSession != null) {
-                authValue = httpSession.getAttribute(authAttributeName);
+            // Pas de session = pas connecté = accès refusé
+            if (httpSession == null) {
+                return "Accès refusé: authentification requise (aucune session active)";
             }
             
-            // Si pas trouvé dans HttpSession, vérifier dans @Session Map
-            if (authValue == null && sessionMap != null) {
-                authValue = sessionMap.get(authAttributeName);
-            }
-            
+            // Vérifier que l'attribut d'authentification existe en session
+            Object authValue = httpSession.getAttribute(authAttributeName);
             if (authValue == null) {
-                return "Accès refusé: authentification requise (attribut '" + authAttributeName + "' introuvable)";
+                return "Accès refusé: authentification requise (attribut '" + authAttributeName + "' absent de la session)";
             }
         }
         
-        // Vérification @Role
-        if (method.isAnnotationPresent(Role.class)) {
+        // ===== Vérification @Role =====
+        if (roleAnnotation != null) {
             if (roleAttributeName == null || roleAttributeName.trim().isEmpty()) {
-                return "Erreur: @Role est utilisé mais roleAttribute n'est pas configuré dans web.xml";
+                return "Erreur: @Role utilisé mais 'roleAttribute' non configuré dans web.xml";
             }
             
-            Role roleAnnotation = method.getAnnotation(Role.class);
-            String requiredRolesStr = roleAnnotation.value();
-            
-            // Séparer les rôles requis (par virgule)
-            String[] requiredRoles = requiredRolesStr.split(",");
-            for (int i = 0; i < requiredRoles.length; i++) {
-                requiredRoles[i] = requiredRoles[i].trim();
+            // Pas de session = pas de rôle = accès refusé
+            if (httpSession == null) {
+                return "Accès refusé: rôle requis (aucune session active)";
             }
             
-            // Chercher l'attribut de rôle dans HttpSession ou @Session Map
-            Object roleValue = null;
-            jakarta.servlet.http.HttpSession httpSession = req.getSession(false);
-            
-            // Vérifier d'abord dans HttpSession
-            if (httpSession != null) {
-                roleValue = httpSession.getAttribute(roleAttributeName);
+            // Récupérer la valeur du rôle depuis l'annotation
+            String requiredRolesStr = getRoleValue(roleAnnotation);
+            if (requiredRolesStr == null || requiredRolesStr.isEmpty()) {
+                return "Erreur: @Role sans valeur définie";
             }
             
-            // Si pas trouvé dans HttpSession, vérifier dans @Session Map
-            if (roleValue == null && sessionMap != null) {
-                roleValue = sessionMap.get(roleAttributeName);
-            }
-            
+            // Récupérer le rôle de l'utilisateur en session
+            Object roleValue = httpSession.getAttribute(roleAttributeName);
             if (roleValue == null) {
-                return "Accès refusé: rôle requis mais attribut '" + roleAttributeName + "' introuvable";
+                return "Accès refusé: rôle requis (attribut '" + roleAttributeName + "' absent de la session)";
             }
             
-            // Le rôle doit être un String
             if (!(roleValue instanceof String)) {
-                return "Erreur: le rôle doit être de type String (type trouvé: " + roleValue.getClass().getSimpleName() + ")";
+                return "Erreur: l'attribut de rôle doit être un String";
             }
             
             String userRole = (String) roleValue;
             
             // Vérifier si le rôle de l'utilisateur correspond à au moins un des rôles requis
-            boolean hasRole = false;
+            String[] requiredRoles = requiredRolesStr.split(",");
+            boolean hasRequiredRole = false;
             for (String requiredRole : requiredRoles) {
-                if (userRole.equals(requiredRole)) {
-                    hasRole = true;
+                if (userRole.equals(requiredRole.trim())) {
+                    hasRequiredRole = true;
                     break;
                 }
             }
             
-            if (!hasRole) {
-                return "Accès refusé: rôle insuffisant. Rôle(s) requis: " + requiredRolesStr + ", votre rôle: " + userRole;
+            if (!hasRequiredRole) {
+                return "Accès refusé: rôle insuffisant. Requis: [" + requiredRolesStr + "], votre rôle: [" + userRole + "]";
             }
         }
         
         return null; // Accès autorisé
+    }
+    
+    /**
+     * Recherche une annotation sur une méthode par son nom canonique.
+     * Cette méthode évite les problèmes de classloader en comparant les noms au lieu des classes.
+     */
+    private Annotation findAnnotationByName(Method method, String annotationClassName) {
+        for (Annotation annotation : method.getAnnotations()) {
+            if (annotation.annotationType().getName().equals(annotationClassName)) {
+                return annotation;
+            }
+        }
+        return null;
+    }
+    
+    /**
+     * Récupère la valeur de l'annotation @Role par réflexion.
+     */
+    private String getRoleValue(Annotation roleAnnotation) {
+        try {
+            Method valueMethod = roleAnnotation.annotationType().getMethod("value");
+            return (String) valueMethod.invoke(roleAnnotation);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+    
+    /**
+     * Échappe les caractères spéciaux pour JSON.
+     */
+    private String escapeJson(String text) {
+        if (text == null) return "";
+        return text.replace("\\", "\\\\")
+                   .replace("\"", "\\\"")
+                   .replace("\n", "\\n")
+                   .replace("\r", "\\r");
     }
 
     private ControllerScanner.MethodInfo resolveMethodInfo(HttpServletRequest req,
@@ -284,7 +319,7 @@ public class FrontServlet extends HttpServlet {
     private Object[] buildMethodArguments(HttpServletRequest req,
                                           String httpMethod,
                                           ControllerScanner.MethodInfo methodInfo,
-                                          Map<String, Object> sessionMap) throws ReflectiveOperationException, ServletException, IOException {
+                                          SessionMap sessionMap) throws ReflectiveOperationException, ServletException, IOException {
         List<String> paramNames = methodInfo.getParameterNames();
         List<Class<?>> paramTypes = methodInfo.getParameterTypes();
         List<String> paramKeys = methodInfo.getParameterKeys();
@@ -748,33 +783,6 @@ public class FrontServlet extends HttpServlet {
             return explicitIndex != null;
         }
     }
-
-    /**
-     * Synchronise la Map @Session avec HttpSession
-     * Toutes les modifications dans la Map sont répercutées dans HttpSession
-     */
-    private void synchronizeSessionMap(HttpServletRequest req, Map<String, Object> sessionMap) {
-        jakarta.servlet.http.HttpSession httpSession = req.getSession();
-        
-        // D'abord, supprimer les attributs qui ont été retirés de la Map
-        java.util.Enumeration<String> attributeNames = httpSession.getAttributeNames();
-        java.util.List<String> toRemove = new java.util.ArrayList<>();
-        while (attributeNames.hasMoreElements()) {
-            String attrName = attributeNames.nextElement();
-            if (!sessionMap.containsKey(attrName)) {
-                toRemove.add(attrName);
-            }
-        }
-        for (String attrName : toRemove) {
-            httpSession.removeAttribute(attrName);
-        }
-        
-        // Ensuite, mettre à jour ou ajouter les attributs de la Map
-        for (Map.Entry<String, Object> entry : sessionMap.entrySet()) {
-            httpSession.setAttribute(entry.getKey(), entry.getValue());
-        }
-    }
-
     /**
      * Gère les réponses JSON pour les méthodes annotées avec @Json
      * Si la méthode retourne une JsonResponse, on la sérialise directement
